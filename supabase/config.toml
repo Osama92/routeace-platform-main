@@ -1,0 +1,43 @@
+project_id = "dfvxwhcifycqqxmxiwjy"
+
+[functions.check-sla-breaches]
+verify_jwt = false
+
+[functions.google-places-autocomplete]
+verify_jwt = false
+
+[functions.google-places-details]
+verify_jwt = false
+
+[functions.update-delivery-status]
+verify_jwt = false
+
+[functions.zoho-sync]
+verify_jwt = false
+
+[functions.calculate-route-distance]
+verify_jwt = false
+
+[functions.send-sla-breach-email]
+verify_jwt = false
+
+[functions.send-sms-notification]
+verify_jwt = false
+
+[functions.send-notification-email]
+verify_jwt = false
+
+[functions.send-approval-notification]
+verify_jwt = false
+
+[functions.send-rate-change-notification]
+verify_jwt = false
+
+[functions.optimize-route]
+verify_jwt = false
+
+[functions.google-sheets-sync]
+verify_jwt = false
+
+[functions.google-distance-matrix]
+verify_jwt = false

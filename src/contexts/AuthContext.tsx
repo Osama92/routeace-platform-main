@@ -1,0 +1,307 @@
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
+import { User, Session } from "@supabase/supabase-js";
+import { supabase } from "@/integrations/supabase/client";
+
+type AppRole = "admin" | "operations" | "support" | "dispatcher" | "driver";
+type ApprovalStatus = "pending" | "approved" | "suspended" | "rejected";
+
+interface AuthContextType {
+  user: User | null;
+  session: Session | null;
+  userRole: AppRole | null;
+  loading: boolean;
+  currentSessionId: string | null;
+  isApproved: boolean;
+  approvalStatus: ApprovalStatus | null;
+  suspensionReason: string | null;
+  signUp: (email: string, password: string, fullName: string) => Promise<{ error: any }>;
+  signIn: (email: string, password: string) => Promise<{ error: any }>;
+  signOut: () => Promise<void>;
+  hasRole: (role: AppRole) => boolean;
+  hasAnyRole: (roles: AppRole[]) => boolean;
+  refreshApprovalStatus: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+};
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
+  const [userRole, setUserRole] = useState<AppRole | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null);
+  const [suspensionReason, setSuspensionReason] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+
+  const isApproved = approvalStatus === "approved";
+
+  const fetchUserRole = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId)
+        .single();
+
+      if (error) {
+        console.log("No role found for user");
+        return null;
+      }
+      return data?.role as AppRole;
+    } catch (error) {
+      console.error("Error fetching user role:", error);
+      return null;
+    }
+  };
+
+  const fetchApprovalStatus = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("approval_status, suspension_reason")
+        .eq("user_id", userId)
+        .single();
+
+      if (error) {
+        console.log("No profile found for user");
+        return { status: null, reason: null };
+      }
+      return {
+        status: data?.approval_status as ApprovalStatus,
+        reason: data?.suspension_reason,
+      };
+    } catch (error) {
+      console.error("Error fetching approval status:", error);
+      return { status: null, reason: null };
+    }
+  };
+
+  const refreshApprovalStatus = async () => {
+    if (user) {
+      const { status, reason } = await fetchApprovalStatus(user.id);
+      setApprovalStatus(status);
+      setSuspensionReason(reason);
+    }
+  };
+
+  // Create a new session record when user logs in
+  const createSessionRecord = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("user_sessions")
+        .insert({
+          user_id: userId,
+          login_at: new Date().toISOString(),
+          ip_address: null,
+          user_agent: navigator.userAgent,
+        })
+        .select("id")
+        .single();
+
+      if (error) {
+        console.error("Error creating session record:", error);
+        return null;
+      }
+
+      return data?.id || null;
+    } catch (error) {
+      console.error("Error creating session record:", error);
+      return null;
+    }
+  };
+
+  // Update session record when user logs out
+  const updateSessionRecord = async (sessionId: string) => {
+    if (!sessionId) return;
+
+    try {
+      const { data: sessionData } = await supabase
+        .from("user_sessions")
+        .select("login_at")
+        .eq("id", sessionId)
+        .single();
+
+      let sessionDuration = null;
+      if (sessionData?.login_at) {
+        const loginTime = new Date(sessionData.login_at);
+        const logoutTime = new Date();
+        sessionDuration = Math.round((logoutTime.getTime() - loginTime.getTime()) / 60000);
+      }
+
+      await supabase
+        .from("user_sessions")
+        .update({
+          logout_at: new Date().toISOString(),
+          session_duration_minutes: sessionDuration,
+        })
+        .eq("id", sessionId);
+    } catch (error) {
+      console.error("Error updating session record:", error);
+    }
+  };
+
+  useEffect(() => {
+    // Set up auth state listener FIRST
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setSession(session);
+        setUser(session?.user ?? null);
+        
+        // Handle session tracking based on auth events
+        if (event === "SIGNED_IN" && session?.user) {
+          // Defer session creation with setTimeout to avoid deadlock
+          setTimeout(async () => {
+            const newSessionId = await createSessionRecord(session.user.id);
+            if (newSessionId) {
+              sessionIdRef.current = newSessionId;
+              setCurrentSessionId(newSessionId);
+            }
+            const role = await fetchUserRole(session.user.id);
+            setUserRole(role);
+            const { status, reason } = await fetchApprovalStatus(session.user.id);
+            setApprovalStatus(status);
+            setSuspensionReason(reason);
+          }, 0);
+        } else if (event === "SIGNED_OUT") {
+          // Update session record on sign out
+          if (sessionIdRef.current) {
+            updateSessionRecord(sessionIdRef.current);
+            sessionIdRef.current = null;
+            setCurrentSessionId(null);
+          }
+          setUserRole(null);
+          setApprovalStatus(null);
+          setSuspensionReason(null);
+        } else if (session?.user) {
+          // For token refresh or other events, just fetch role and status
+          setTimeout(async () => {
+            const role = await fetchUserRole(session.user.id);
+            setUserRole(role);
+            const { status, reason } = await fetchApprovalStatus(session.user.id);
+            setApprovalStatus(status);
+            setSuspensionReason(reason);
+          }, 0);
+        }
+        
+        setLoading(false);
+      }
+    );
+
+    // THEN check for existing session
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        // Create session record for existing session if not already tracked
+        const newSessionId = await createSessionRecord(session.user.id);
+        if (newSessionId) {
+          sessionIdRef.current = newSessionId;
+          setCurrentSessionId(newSessionId);
+        }
+        const role = await fetchUserRole(session.user.id);
+        setUserRole(role);
+        const { status, reason } = await fetchApprovalStatus(session.user.id);
+        setApprovalStatus(status);
+        setSuspensionReason(reason);
+      }
+      setLoading(false);
+    });
+
+    // Clean up session on page unload
+    const handleBeforeUnload = () => {
+      if (sessionIdRef.current) {
+        const payload = JSON.stringify({
+          session_id: sessionIdRef.current,
+          logout_at: new Date().toISOString(),
+        });
+        navigator.sendBeacon?.(
+          `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/user_sessions?id=eq.${sessionIdRef.current}`,
+          payload
+        );
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, []);
+
+  const signUp = async (email: string, password: string, fullName: string) => {
+    const redirectUrl = `${window.location.origin}/`;
+    
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: redirectUrl,
+        data: {
+          full_name: fullName,
+        },
+      },
+    });
+    return { error };
+  };
+
+  const signIn = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    return { error };
+  };
+
+  const signOut = async () => {
+    // Update session record before signing out
+    if (sessionIdRef.current) {
+      await updateSessionRecord(sessionIdRef.current);
+      sessionIdRef.current = null;
+      setCurrentSessionId(null);
+    }
+    
+    await supabase.auth.signOut();
+    setUser(null);
+    setSession(null);
+    setUserRole(null);
+    setApprovalStatus(null);
+    setSuspensionReason(null);
+  };
+
+  const hasRole = (role: AppRole) => userRole === role;
+  
+  const hasAnyRole = (roles: AppRole[]) => userRole !== null && roles.includes(userRole);
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        session,
+        userRole,
+        loading,
+        currentSessionId,
+        isApproved,
+        approvalStatus,
+        suspensionReason,
+        signUp,
+        signIn,
+        signOut,
+        hasRole,
+        hasAnyRole,
+        refreshApprovalStatus,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+};
