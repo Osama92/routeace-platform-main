@@ -47,6 +47,8 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchKpis = async () => {
       const start = startOfMonthISO();
+      const currentMonth = new Date().getMonth() + 1;
+      const currentYear = new Date().getFullYear();
 
       // Active shipments (not delivered/cancelled)
       const { count: activeCount } = await supabase
@@ -54,41 +56,88 @@ const Dashboard = () => {
         .select("id", { count: "exact", head: true })
         .not("status", "in", "(delivered,cancelled)");
 
-      // Revenue MTD (all invoices raised this month, regardless of payment status)
-      const { data: invoices } = await supabase
-        .from("invoices")
-        .select("total_amount")
-        .gte("created_at", start);
-      const revenueMtd = (invoices || []).reduce((sum, r: any) => sum + Number(r.total_amount || 0), 0);
+      // Revenue MTD - First try historical_invoice_data (transactions), then fall back to invoices
+      let revenueMtd = 0;
+      let totalCostMtd = 0;
 
-      // Distance MTD (sum delivered dispatches this month)
+      // Try historical_invoice_data first (more comprehensive)
+      const { data: transactions } = await supabase
+        .from("historical_invoice_data")
+        .select("total_revenue, total_cost, total_vendor_cost")
+        .eq("period_year", currentYear)
+        .eq("period_month", currentMonth);
+
+      if (transactions && transactions.length > 0) {
+        revenueMtd = transactions.reduce((sum, t: any) => sum + Number(t.total_revenue || 0), 0);
+        totalCostMtd = transactions.reduce((sum, t: any) =>
+          sum + Number(t.total_cost || 0) + Number(t.total_vendor_cost || 0), 0);
+      } else {
+        // Fall back to invoices if no transaction data
+        const { data: invoices } = await supabase
+          .from("invoices")
+          .select("total_amount")
+          .gte("created_at", start);
+        revenueMtd = (invoices || []).reduce((sum, r: any) => sum + Number(r.total_amount || 0), 0);
+      }
+
+      // Distance MTD (sum delivered dispatches this month) - primary source
+      // Using total_distance_km which includes return distance, falling back to distance_km
+      // Filter by updated_at since that's when the dispatch was marked as delivered
       const { data: delivered } = await supabase
         .from("dispatches")
-        .select("distance_km,cost")
+        .select("distance_km, total_distance_km, cost")
         .eq("status", "delivered")
-        .gte("created_at", start);
-      const totalDistanceKm = (delivered || []).reduce((sum, r: any) => sum + Number(r.distance_km || 0), 0);
-      const totalCost = (delivered || []).reduce((sum, r: any) => sum + Number(r.cost || 0), 0);
-      const avgCostPerKm = totalDistanceKm > 0 ? totalCost / totalDistanceKm : 0;
+        .gte("updated_at", start);
 
-      // On-time rate (scheduled vs actual delivery; only where both present)
-      const { data: deliveredTimes } = await supabase
+      // Calculate total distance from dispatches (authoritative source)
+      // Prefer total_distance_km (includes return), fall back to distance_km
+      let totalDistanceKm = (delivered || []).reduce((sum, r: any) =>
+        sum + Number(r.total_distance_km || r.distance_km || 0), 0);
+
+      // If no dispatch distance data, try historical_invoice_data as fallback
+      if (totalDistanceKm === 0 && transactions && transactions.length > 0) {
+        const { data: transactionsWithDistance } = await supabase
+          .from("historical_invoice_data")
+          .select("km_covered")
+          .eq("period_year", currentYear)
+          .eq("period_month", currentMonth);
+        totalDistanceKm = (transactionsWithDistance || []).reduce((sum, t: any) =>
+          sum + Number(t.km_covered || 0), 0);
+      }
+
+      // Calculate average cost per km from transaction data or dispatches
+      let avgCostPerKm = 0;
+      if (totalCostMtd > 0 && totalDistanceKm > 0) {
+        avgCostPerKm = totalCostMtd / totalDistanceKm;
+      } else {
+        const totalCost = (delivered || []).reduce((sum, r: any) => sum + Number(r.cost || 0), 0);
+        avgCostPerKm = totalDistanceKm > 0 ? totalCost / totalDistanceKm : 0;
+      }
+
+      // Completion rate - count dispatches delivered this month vs total created this month
+      // Use updated_at for delivered count (when status changed to delivered)
+      const { count: deliveredCount } = await supabase
         .from("dispatches")
-        .select("scheduled_delivery,actual_delivery")
+        .select("id", { count: "exact", head: true })
         .eq("status", "delivered")
+        .gte("updated_at", start);
+
+      const { count: totalDispatchCount } = await supabase
+        .from("dispatches")
+        .select("id", { count: "exact", head: true })
         .gte("created_at", start)
-        .not("scheduled_delivery", "is", null)
-        .not("actual_delivery", "is", null);
+        .not("status", "eq", "cancelled");
 
-      const onTime = (deliveredTimes || []).filter((r: any) => new Date(r.actual_delivery) <= new Date(r.scheduled_delivery)).length;
-      const totalTimed = (deliveredTimes || []).length;
-      const onTimeRate = totalTimed > 0 ? (onTime / totalTimed) * 100 : 0;
+      // Completion rate = delivered this month / total created this month
+      const onTimeRate = totalDispatchCount && totalDispatchCount > 0
+        ? ((deliveredCount || 0) / totalDispatchCount) * 100
+        : 0;
 
-      // Fleet utilization: vehicles currently assigned to active dispatches / total active vehicles
+      // Fleet utilization: vehicles currently assigned to active dispatches / total available/in_use vehicles
       const { count: totalVehicles } = await supabase
         .from("vehicles")
         .select("id", { count: "exact", head: true })
-        .eq("status", "active");
+        .in("status", ["available", "in_use"]);
 
       const { data: activeDispatchVehicles } = await supabase
         .from("dispatches")

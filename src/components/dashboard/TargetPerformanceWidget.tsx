@@ -38,12 +38,30 @@ const TargetPerformanceWidget = () => {
       const startOfMonth = new Date(currentYear, currentMonth - 1, 1).toISOString();
       const endOfMonth = new Date(currentYear, currentMonth, 0, 23, 59, 59).toISOString();
 
-      const { data: invoices } = await supabase
-        .from("invoices")
-        .select("total_amount")
-        .eq("status", "paid")
-        .gte("created_at", startOfMonth)
-        .lte("created_at", endOfMonth);
+      // First try historical_invoice_data (transactions) for most accurate figures
+      const { data: transactions } = await supabase
+        .from("historical_invoice_data")
+        .select("total_revenue, total_cost, total_vendor_cost, gross_profit")
+        .eq("period_year", currentYear)
+        .eq("period_month", currentMonth);
+
+      let actualRevenue = 0;
+      let actualCogs = 0;
+
+      if (transactions && transactions.length > 0) {
+        actualRevenue = transactions.reduce((sum, t) => sum + Number(t.total_revenue || 0), 0);
+        actualCogs = transactions.reduce((sum, t) =>
+          sum + Number(t.total_cost || 0) + Number(t.total_vendor_cost || 0), 0);
+      } else {
+        // Fall back to invoices
+        const { data: invoices } = await supabase
+          .from("invoices")
+          .select("total_amount")
+          .eq("status", "paid")
+          .gte("created_at", startOfMonth)
+          .lte("created_at", endOfMonth);
+        actualRevenue = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
+      }
 
       const { data: expenses } = await supabase
         .from("expenses")
@@ -51,8 +69,10 @@ const TargetPerformanceWidget = () => {
         .gte("expense_date", startOfMonth.split('T')[0])
         .lte("expense_date", endOfMonth.split('T')[0]);
 
-      const actualRevenue = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
-      const actualCogs = expenses?.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
+      // If no transaction data for COGS, use expenses
+      if (actualCogs === 0) {
+        actualCogs = expenses?.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
+      }
       const actualOpex = expenses?.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
       const actualProfit = actualRevenue - actualCogs - actualOpex;
 

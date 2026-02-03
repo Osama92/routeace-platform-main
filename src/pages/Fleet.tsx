@@ -69,6 +69,14 @@ interface Vehicle {
   current_lat: number | null;
   current_lng: number | null;
   location_updated_at: string | null;
+  fleet_type: string | null;
+  vendor_id: string | null;
+  vendor?: { id: string; company_name: string } | null;
+}
+
+interface Vendor {
+  id: string;
+  company_name: string;
 }
 
 interface VehicleDocument {
@@ -99,8 +107,10 @@ const documentTypes = [
 const FleetPage = () => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [documents, setDocuments] = useState<VehicleDocument[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [fleetTypeFilter, setFleetTypeFilter] = useState<string>("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDocDialogOpen, setIsDocDialogOpen] = useState(false);
   const [isLocationDialogOpen, setIsLocationDialogOpen] = useState(false);
@@ -126,6 +136,8 @@ const FleetPage = () => {
     year: "",
     capacity_kg: "",
     fuel_type: "diesel",
+    fleet_type: "internal",
+    vendor_id: "",
   });
 
   const [docFormData, setDocFormData] = useState({
@@ -138,7 +150,10 @@ const FleetPage = () => {
     try {
       const { data, error } = await supabase
         .from("vehicles")
-        .select("*")
+        .select(`
+          *,
+          vendor:vendor_id (id, company_name)
+        `)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -151,6 +166,22 @@ const FleetPage = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchVendors = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("partners")
+        .select("id, company_name")
+        .eq("partner_type", "transporter")
+        .eq("approval_status", "approved")
+        .order("company_name");
+
+      if (error) throw error;
+      setVendors(data || []);
+    } catch (error: any) {
+      console.error("Error fetching vendors:", error);
     }
   };
 
@@ -171,6 +202,7 @@ const FleetPage = () => {
   useEffect(() => {
     fetchVehicles();
     fetchDocuments();
+    fetchVendors();
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -183,6 +215,16 @@ const FleetPage = () => {
       toast({
         title: "Validation Error",
         description: "Please fill in required fields",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate that 3PL vehicles must have a vendor selected
+    if (formData.fleet_type === "3pl" && !formData.vendor_id) {
+      toast({
+        title: "Validation Error",
+        description: "Please select a 3PL vendor for this vehicle",
         variant: "destructive",
       });
       return;
@@ -201,6 +243,8 @@ const FleetPage = () => {
         year: formData.year ? parseInt(formData.year) : null,
         capacity_kg: formData.capacity_kg ? parseFloat(formData.capacity_kg) : null,
         fuel_type: formData.fuel_type,
+        fleet_type: formData.fleet_type,
+        vendor_id: formData.fleet_type === "3pl" ? formData.vendor_id : null,
         approval_status: needsApproval ? "pending" : "approved",
         created_by_role: userRole,
       };
@@ -234,6 +278,8 @@ const FleetPage = () => {
         year: "",
         capacity_kg: "",
         fuel_type: "diesel",
+        fleet_type: "internal",
+        vendor_id: "",
       });
       fetchVehicles();
     } catch (error: any) {
@@ -369,10 +415,13 @@ const FleetPage = () => {
     const matchesSearch =
       vehicle.registration_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (vehicle.make?.toLowerCase().includes(searchQuery.toLowerCase()) || false) ||
-      (vehicle.model?.toLowerCase().includes(searchQuery.toLowerCase()) || false);
+      (vehicle.model?.toLowerCase().includes(searchQuery.toLowerCase()) || false) ||
+      (vehicle.vendor?.company_name?.toLowerCase().includes(searchQuery.toLowerCase()) || false);
     const matchesStatus =
       statusFilter === "all" || vehicle.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesFleetType =
+      fleetTypeFilter === "all" || vehicle.fleet_type === fleetTypeFilter;
+    return matchesSearch && matchesStatus && matchesFleetType;
   });
 
   const expiringDocs = documents.filter(doc => {
@@ -392,7 +441,7 @@ const FleetPage = () => {
       subtitle="Manage your vehicle fleet, documents, and maintenance schedules"
     >
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
         {[
           {
             label: "Total Vehicles",
@@ -401,10 +450,16 @@ const FleetPage = () => {
             color: "text-foreground",
           },
           {
-            label: "Available",
-            value: vehicles.filter((v) => v.status === "available").length,
+            label: "Internal Fleet",
+            value: vehicles.filter((v) => v.fleet_type !== "3pl").length,
             icon: CheckCircle,
             color: "text-success",
+          },
+          {
+            label: "3PL Vehicles",
+            value: vehicles.filter((v) => v.fleet_type === "3pl").length,
+            icon: Truck,
+            color: "text-blue-500",
           },
           {
             label: "In Maintenance",
@@ -482,6 +537,17 @@ const FleetPage = () => {
               <SelectItem value="retired">Retired</SelectItem>
             </SelectContent>
           </Select>
+          <Select value={fleetTypeFilter} onValueChange={setFleetTypeFilter}>
+            <SelectTrigger className="w-40 bg-secondary/50 border-border/50">
+              <Truck className="w-4 h-4 mr-2" />
+              <SelectValue placeholder="Fleet Type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Fleet</SelectItem>
+              <SelectItem value="internal">Internal Fleet</SelectItem>
+              <SelectItem value="3pl">3PL Vendors</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {canManage && (
@@ -500,8 +566,9 @@ const FleetPage = () => {
                 </DialogDescription>
               </DialogHeader>
               <Tabs defaultValue="details" className="mt-4">
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="details">Vehicle Details</TabsTrigger>
+                  <TabsTrigger value="fleet">Fleet Type</TabsTrigger>
                   <TabsTrigger value="specs">Specifications</TabsTrigger>
                 </TabsList>
                 <TabsContent value="details" className="space-y-4 mt-4">
@@ -560,6 +627,49 @@ const FleetPage = () => {
                       />
                     </div>
                   </div>
+                </TabsContent>
+                <TabsContent value="fleet" className="space-y-4 mt-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="fleet_type">Fleet Type *</Label>
+                    <Select
+                      value={formData.fleet_type}
+                      onValueChange={(value) => setFormData(prev => ({ ...prev, fleet_type: value, vendor_id: value === "internal" ? "" : prev.vendor_id }))}
+                    >
+                      <SelectTrigger className="bg-secondary/50">
+                        <SelectValue placeholder="Select fleet type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="internal">Internal Fleet (Owned)</SelectItem>
+                        <SelectItem value="3pl">3PL Vendor</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Select "Internal Fleet" for company-owned vehicles or "3PL Vendor" for third-party logistics vehicles.
+                    </p>
+                  </div>
+                  {formData.fleet_type === "3pl" && (
+                    <div className="space-y-2">
+                      <Label htmlFor="vendor_id">3PL Vendor *</Label>
+                      <Select
+                        value={formData.vendor_id}
+                        onValueChange={(value) => setFormData(prev => ({ ...prev, vendor_id: value }))}
+                      >
+                        <SelectTrigger className="bg-secondary/50">
+                          <SelectValue placeholder="Select vendor" />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-[300px]">
+                          {vendors.map((vendor) => (
+                            <SelectItem key={vendor.id} value={vendor.id}>
+                              {vendor.company_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Select the 3PL vendor that owns/operates this vehicle.
+                      </p>
+                    </div>
+                  )}
                 </TabsContent>
                 <TabsContent value="specs" className="space-y-4 mt-4">
                   <div className="grid grid-cols-2 gap-4">
@@ -671,7 +781,7 @@ const FleetPage = () => {
                 </div>
 
                 {/* Status & Type */}
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <Badge className={statusInfo.color}>
                     <StatusIcon className="w-3 h-3 mr-1" />
                     {statusInfo.label}
@@ -679,7 +789,21 @@ const FleetPage = () => {
                   <Badge variant="outline" className="text-muted-foreground">
                     {vehicle.vehicle_type.replace("_", " ")}
                   </Badge>
+                  <Badge
+                    variant="outline"
+                    className={vehicle.fleet_type === "3pl" ? "bg-blue-500/15 text-blue-500 border-blue-500/30" : "bg-green-500/15 text-green-500 border-green-500/30"}
+                  >
+                    {vehicle.fleet_type === "3pl" ? "3PL" : "Internal"}
+                  </Badge>
                 </div>
+
+                {/* 3PL Vendor Info */}
+                {vehicle.fleet_type === "3pl" && vehicle.vendor && (
+                  <div className="mb-4 p-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                    <p className="text-xs text-muted-foreground">3PL Vendor</p>
+                    <p className="text-sm font-medium text-foreground">{vehicle.vendor.company_name}</p>
+                  </div>
+                )}
 
                 {/* Details */}
                 <div className="space-y-3 mb-4">

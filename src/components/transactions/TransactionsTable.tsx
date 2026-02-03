@@ -88,7 +88,7 @@ export interface TransactionRecord {
   wht_status: string | null;
   wht_deducted: number | null;
   bank_payment_received: string | null;
-  bank_debited: string | null;
+  bank_debited: number | string | null;
   gap_in_payment: number | null;
   invoice_ageing: number | null;
   invoice_age_for_interest: number | null;
@@ -365,6 +365,10 @@ const TransactionsTable = ({
       case "extra_dropoff_cost":
       case "daily_rate":
         return formatCurrency(value as number);
+      case "bank_debited":
+        // Handle bank_debited which could be string or number in the database
+        const bankDebitedValue = typeof value === 'string' ? parseFloat(value) : value;
+        return formatCurrency(bankDebitedValue as number);
       // Date columns
       case "transaction_date":
       case "invoice_date":

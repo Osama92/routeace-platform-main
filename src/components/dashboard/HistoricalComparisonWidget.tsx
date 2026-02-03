@@ -74,7 +74,19 @@ const HistoricalComparisonWidget = () => {
           break;
       }
 
-      // Fetch current period dispatches
+      // Fetch current period from historical_invoice_data first (most accurate)
+      const currentStartMonth = currentStart.getMonth() + 1;
+      const currentEndMonth = currentEnd.getMonth() + 1;
+      const currentStartYear = currentStart.getFullYear();
+
+      const { data: currentTransactions } = await supabase
+        .from("historical_invoice_data")
+        .select("total_revenue, total_cost, total_vendor_cost, km_covered, num_deliveries")
+        .eq("period_year", currentStartYear)
+        .gte("period_month", currentStartMonth)
+        .lte("period_month", currentEndMonth);
+
+      // Fetch current period dispatches as fallback
       const { data: currentDispatches, error: currentDispatchErr } = await supabase
         .from("dispatches")
         .select("id, distance_km, cost")
@@ -84,7 +96,7 @@ const HistoricalComparisonWidget = () => {
 
       if (currentDispatchErr) throw currentDispatchErr;
 
-      // Fetch current period invoices
+      // Fetch current period invoices as fallback
       const { data: currentInvoices, error: currentInvoiceErr } = await supabase
         .from("invoices")
         .select("total_amount")
@@ -93,10 +105,10 @@ const HistoricalComparisonWidget = () => {
 
       if (currentInvoiceErr) throw currentInvoiceErr;
 
-      // Try to fetch historical data first (for revenue/trips summary)
+      // Try to fetch historical data (for last year comparison)
       const { data: historicalData } = await supabase
         .from("historical_invoice_data")
-        .select("trips_count, total_revenue, total_cost, total_distance")
+        .select("total_revenue, total_cost, total_vendor_cost, km_covered, num_deliveries, trips_count")
         .eq("period_year", lastYearStart.getFullYear())
         .gte("period_month", lastYearStart.getMonth() + 1)
         .lte("period_month", lastYearEnd.getMonth() + 1);
@@ -105,7 +117,7 @@ const HistoricalComparisonWidget = () => {
       let previousTrips = 0;
       let previousDistance = 0;
 
-      // Always try to get actual dispatch data from last year for accurate distance
+      // Always try to get actual dispatch data from last year as fallback
       const { data: lastYearDispatches } = await supabase
         .from("dispatches")
         .select("id, distance_km, cost")
@@ -122,12 +134,12 @@ const HistoricalComparisonWidget = () => {
       // Use historical summary data if available, otherwise fall back to dispatch data
       if (historicalData && historicalData.length > 0) {
         previousRevenue = historicalData.reduce((sum, d) => sum + (d.total_revenue || 0), 0);
-        previousTrips = historicalData.reduce((sum, d) => sum + (d.trips_count || 0), 0);
-        // Use total_distance from historical data if available, otherwise calculate from dispatches
-        const historicalDistance = historicalData.reduce((sum, d) => sum + (d.total_distance || 0), 0);
-        previousDistance = historicalDistance > 0
-          ? historicalDistance
-          : (lastYearDispatches || []).reduce((sum, d) => sum + (d.distance_km || 0), 0);
+        previousTrips = historicalData.reduce((sum, d) => sum + (d.trips_count || d.num_deliveries || 0), 0);
+        previousDistance = historicalData.reduce((sum, d) => sum + (d.km_covered || 0), 0);
+        // Fall back to dispatches for distance if not in historical data
+        if (previousDistance === 0) {
+          previousDistance = (lastYearDispatches || []).reduce((sum, d) => sum + (d.distance_km || 0), 0);
+        }
       } else {
         // Use dispatch data directly
         previousRevenue = (lastYearInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
@@ -135,10 +147,28 @@ const HistoricalComparisonWidget = () => {
         previousDistance = (lastYearDispatches || []).reduce((sum, d) => sum + (d.distance_km || 0), 0);
       }
 
-      // Calculate current metrics
-      const currentRevenue = (currentInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-      const currentTrips = (currentDispatches || []).length;
-      const currentDistance = (currentDispatches || []).reduce((sum, d) => sum + (d.distance_km || 0), 0);
+      // Calculate current metrics - prefer transaction data if available
+      let currentRevenue = 0;
+      let currentTrips = 0;
+      let currentDistance = 0;
+
+      if (currentTransactions && currentTransactions.length > 0) {
+        currentRevenue = currentTransactions.reduce((sum, t) => sum + (t.total_revenue || 0), 0);
+        currentTrips = currentTransactions.reduce((sum, t) => sum + (t.num_deliveries || 1), 0);
+        currentDistance = currentTransactions.reduce((sum, t) => sum + (t.km_covered || 0), 0);
+      }
+
+      // Fall back to dispatches/invoices if no transaction data
+      if (currentRevenue === 0) {
+        currentRevenue = (currentInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
+      }
+      if (currentTrips === 0) {
+        currentTrips = (currentDispatches || []).length;
+      }
+      if (currentDistance === 0) {
+        currentDistance = (currentDispatches || []).reduce((sum, d) => sum + (d.distance_km || 0), 0);
+      }
+
       const currentAvgRevenue = currentTrips > 0 ? currentRevenue / currentTrips : 0;
       const previousAvgRevenue = previousTrips > 0 ? previousRevenue / previousTrips : 0;
 
@@ -192,19 +222,19 @@ const HistoricalComparisonWidget = () => {
   const TrendBadge = ({ trend }: { trend: number }) => {
     if (trend === 0) {
       return (
-        <Badge variant="outline" className="flex items-center gap-1">
+        <Badge variant="outline" className="flex items-center gap-0.5 text-xs px-1.5 py-0 h-5 shrink-0">
           <Minus className="w-3 h-3" />
           0%
         </Badge>
       );
     }
     return trend > 0 ? (
-      <Badge className="flex items-center gap-1 bg-green-500/15 text-green-600 hover:bg-green-500/20">
+      <Badge className="flex items-center gap-0.5 text-xs px-1.5 py-0 h-5 shrink-0 bg-green-500/15 text-green-600 hover:bg-green-500/20">
         <TrendingUp className="w-3 h-3" />
         +{trend}%
       </Badge>
     ) : (
-      <Badge className="flex items-center gap-1 bg-destructive/15 text-destructive hover:bg-destructive/20">
+      <Badge className="flex items-center gap-0.5 text-xs px-1.5 py-0 h-5 shrink-0 bg-destructive/15 text-destructive hover:bg-destructive/20">
         <TrendingDown className="w-3 h-3" />
         {trend}%
       </Badge>
@@ -240,17 +270,17 @@ const HistoricalComparisonWidget = () => {
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             {metrics.map((metric) => (
-              <div key={metric.label} className="space-y-1">
-                <p className="text-xs text-muted-foreground">{metric.label}</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-lg font-bold">
+              <div key={metric.label} className="space-y-1 min-w-0">
+                <p className="text-xs text-muted-foreground truncate">{metric.label}</p>
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="text-base font-bold whitespace-nowrap">
                     {formatValue(metric.current, metric.format)}
                   </span>
                   <TrendBadge trend={metric.trend} />
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground truncate">
                   vs {formatValue(metric.previous, metric.format)} last year
                 </p>
               </div>

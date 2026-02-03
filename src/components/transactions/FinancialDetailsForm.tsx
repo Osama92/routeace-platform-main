@@ -38,8 +38,10 @@ const MONTH_NAMES = [
 
 const TRANSACTION_TYPES = ["VC", "FC", "DC", "SC", "Other"];
 const PAYMENT_STATUSES = ["Paid", "Partial", "Unpaid", "Pending"];
-const INVOICE_STATUSES = ["Draft", "Invoiced", "Sent", "Overdue", "Cancelled"];
-const WHT_STATUSES = ["Remitted", "Not Remitted", "Pending", "N/A"];
+const INVOICE_STATUSES = ["Paid", "Not Paid", "Partially Paid", "Draft", "Invoiced", "Sent", "Overdue", "Cancelled"];
+const VENDOR_INVOICE_STATUSES = ["Paid", "Unpaid", "Partial", "Pending", "Submitted", "Approved"];
+const WHT_STATUSES = ["Yes", "No", "Remitted", "Not Remitted", "Pending", "N/A"];
+const YES_NO_OPTIONS = ["Yes", "No"];
 
 interface DispatchData {
   id: string;
@@ -50,7 +52,13 @@ interface DispatchData {
   cargo_weight_kg: number | null;
   customers?: { id: string; company_name: string } | null;
   drivers?: { id: string; full_name: string } | null;
-  vehicles?: { id: string; registration_number: string } | null;
+  vehicles?: {
+    id: string;
+    registration_number: string;
+    fleet_type?: string | null;
+    vendor_id?: string | null;
+    vendor?: { id: string; company_name: string } | null;
+  } | null;
 }
 
 interface FinancialDetailsFormProps {
@@ -126,8 +134,8 @@ interface FormValues {
   wht_deducted: number | null;
 
   // Bank Info
-  bank_payment_received: string;
-  bank_debited: string;
+  bank_payment_received: string;  // Yes/No
+  bank_debited: number | null;    // Amount debited
 
   // Analysis
   gap_in_payment: number | null;
@@ -199,10 +207,10 @@ const FinancialDetailsForm = ({
       invoice_paid_date: "",
       invoice_amount_paid: 0,
       balance_owed: 0,
-      wht_status: "N/A",
+      wht_status: "No",
       wht_deducted: 0,
-      bank_payment_received: "",
-      bank_debited: "",
+      bank_payment_received: "No",
+      bank_debited: null,
       gap_in_payment: null,
       invoice_ageing: null,
       invoice_age_for_interest: null,
@@ -242,6 +250,11 @@ const FinancialDetailsForm = ({
       form.setValue("transaction_date", transactionDate.toISOString().split("T")[0]);
       form.setValue("period_month", transactionDate.getMonth() + 1);
       form.setValue("period_year", transactionDate.getFullYear());
+
+      // Auto-populate 3PL vendor if vehicle is a 3PL vehicle
+      if (dispatch.vehicles?.fleet_type === "3pl" && dispatch.vehicles?.vendor?.company_name) {
+        form.setValue("vendor_name", dispatch.vehicles.vendor.company_name);
+      }
     }
   }, [dispatch, form]);
 
@@ -317,6 +330,8 @@ const FinancialDetailsForm = ({
         dispatch_id: dispatch?.id || null,
         customer_id: dispatch?.customers?.id || null,
         imported_at: new Date().toISOString(),
+        // Convert bank_debited to string for database compatibility
+        bank_debited: data.bank_debited !== null ? String(data.bank_debited) : null,
       };
 
       let transactionId: string | null = null;
@@ -997,7 +1012,7 @@ const FinancialDetailsForm = ({
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              {PAYMENT_STATUSES.map((s) => (
+                              {VENDOR_INVOICE_STATUSES.map((s) => (
                                 <SelectItem key={s} value={s}>{s}</SelectItem>
                               ))}
                             </SelectContent>
@@ -1160,9 +1175,18 @@ const FinancialDetailsForm = ({
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>Bank Payment Received</FormLabel>
-                          <FormControl>
-                            <Input {...field} placeholder="Bank name" />
-                          </FormControl>
+                          <Select onValueChange={field.onChange} value={field.value || ""}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {YES_NO_OPTIONS.map((opt) => (
+                                <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </FormItem>
                       )}
                     />
@@ -1171,9 +1195,15 @@ const FinancialDetailsForm = ({
                       name="bank_debited"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Bank Debited</FormLabel>
+                          <FormLabel>Bank Debited (Amount)</FormLabel>
                           <FormControl>
-                            <Input {...field} placeholder="Bank name" />
+                            <Input
+                              type="number"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
+                              value={field.value ?? ""}
+                              placeholder="Amount debited by bank"
+                            />
                           </FormControl>
                         </FormItem>
                       )}

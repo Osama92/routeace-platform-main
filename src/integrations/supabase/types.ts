@@ -2204,6 +2204,8 @@ export type Database = {
           current_lat: number | null
           current_lng: number | null
           location_updated_at: string | null
+          fleet_type: string | null
+          vendor_id: string | null
         }
         Insert: {
           capacity_kg?: number | null
@@ -2228,6 +2230,8 @@ export type Database = {
           current_lat?: number | null
           current_lng?: number | null
           location_updated_at?: string | null
+          fleet_type?: string | null
+          vendor_id?: string | null
         }
         Update: {
           capacity_kg?: number | null
@@ -2252,11 +2256,20 @@ export type Database = {
           current_lat?: number | null
           current_lng?: number | null
           location_updated_at?: string | null
+          fleet_type?: string | null
+          vendor_id?: string | null
         }
         Relationships: [
           {
             foreignKeyName: "vehicles_partner_id_fkey"
             columns: ["partner_id"]
+            isOneToOne: false
+            referencedRelation: "partners"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vehicles_vendor_id_fkey"
+            columns: ["vendor_id"]
             isOneToOne: false
             referencedRelation: "partners"
             referencedColumns: ["id"]

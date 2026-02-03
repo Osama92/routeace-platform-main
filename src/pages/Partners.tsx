@@ -43,7 +43,10 @@ import {
   Package,
   Users,
   CreditCard,
+  Edit2,
+  Power,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -67,6 +70,7 @@ interface Partner {
   bank_account_number: string | null;
   bank_account_name: string | null;
   is_verified: boolean;
+  is_active: boolean;
   notes: string | null;
   created_at: string;
 }
@@ -76,11 +80,21 @@ const Partners = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
+  const [selectedPartner, setSelectedPartner] = useState<Partner | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   const { user, hasAnyRole } = useAuth();
   const { logChange } = useAuditLog();
+
+  // Edit form data for view/edit dialog
+  const [editFormData, setEditFormData] = useState({
+    contact_name: "",
+    contact_email: "",
+    contact_phone: "",
+    is_active: true,
+  });
 
   const [formData, setFormData] = useState({
     company_name: "",
@@ -213,6 +227,116 @@ const Partners = () => {
     }
   };
 
+  const handleViewPartner = (partner: Partner) => {
+    setSelectedPartner(partner);
+    setEditFormData({
+      contact_name: partner.contact_name || "",
+      contact_email: partner.contact_email || "",
+      contact_phone: partner.contact_phone || "",
+      is_active: partner.is_active !== false, // Default to true if not set
+    });
+    setIsViewDialogOpen(true);
+  };
+
+  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEditFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleUpdatePartner = async () => {
+    if (!selectedPartner) return;
+
+    if (!editFormData.contact_email || !editFormData.contact_phone) {
+      toast({
+        title: "Validation Error",
+        description: "Contact email and phone are required",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updateData = {
+        contact_name: editFormData.contact_name,
+        contact_email: editFormData.contact_email,
+        contact_phone: editFormData.contact_phone,
+        is_active: editFormData.is_active,
+      };
+
+      const { error } = await supabase
+        .from("partners")
+        .update(updateData)
+        .eq("id", selectedPartner.id);
+
+      if (error) throw error;
+
+      // Log the update
+      await logChange({
+        table_name: "partners",
+        record_id: selectedPartner.id,
+        action: "update",
+        old_data: {
+          contact_name: selectedPartner.contact_name,
+          contact_email: selectedPartner.contact_email,
+          contact_phone: selectedPartner.contact_phone,
+          is_active: selectedPartner.is_active,
+        },
+        new_data: updateData,
+      });
+
+      toast({
+        title: "Success",
+        description: "Partner updated successfully",
+      });
+      setIsViewDialogOpen(false);
+      setSelectedPartner(null);
+      fetchPartners();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update partner",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleActive = async (partner: Partner) => {
+    try {
+      const newActiveStatus = !partner.is_active;
+
+      const { error } = await supabase
+        .from("partners")
+        .update({ is_active: newActiveStatus })
+        .eq("id", partner.id);
+
+      if (error) throw error;
+
+      // Log the change
+      await logChange({
+        table_name: "partners",
+        record_id: partner.id,
+        action: "update",
+        old_data: { is_active: partner.is_active },
+        new_data: { is_active: newActiveStatus },
+      });
+
+      toast({
+        title: "Success",
+        description: `Partner marked as ${newActiveStatus ? "active" : "inactive"}`,
+      });
+      fetchPartners();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update partner status",
+        variant: "destructive",
+      });
+    }
+  };
+
   const filteredPartners = partners.filter((partner) => {
     const matchesSearch =
       partner.company_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -309,13 +433,13 @@ const Partners = () => {
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-success/20 flex items-center justify-center">
-              <CheckCircle className="w-6 h-6 text-success" />
+              <Power className="w-6 h-6 text-success" />
             </div>
             <div>
               <p className="text-2xl font-heading font-bold text-foreground">
-                {partners.filter(p => p.is_verified).length}
+                {partners.filter(p => p.is_active !== false).length}
               </p>
-              <p className="text-sm text-muted-foreground">Verified</p>
+              <p className="text-sm text-muted-foreground">Active</p>
             </div>
           </div>
         </motion.div>
@@ -607,6 +731,132 @@ const Partners = () => {
         )}
       </div>
 
+      {/* View/Edit Partner Dialog */}
+      <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="font-heading flex items-center gap-2">
+              <Edit2 className="w-5 h-5" />
+              Partner Details
+            </DialogTitle>
+            <DialogDescription>
+              View and edit partner contact information
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedPartner && (
+            <div className="space-y-6 mt-4">
+              {/* Company Info (read-only) */}
+              <div className="p-4 bg-secondary/30 rounded-lg">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center">
+                    {getTypeIcon(selectedPartner.partner_type)}
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-foreground">{selectedPartner.company_name}</h4>
+                    <span className={`status-badge ${getTypeBadge(selectedPartner.partner_type)} text-xs`}>
+                      {selectedPartner.partner_type.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+                {selectedPartner.address && (
+                  <p className="text-sm text-muted-foreground flex items-center gap-2">
+                    <MapPin className="w-4 h-4" />
+                    {selectedPartner.address}{selectedPartner.city && `, ${selectedPartner.city}`}{selectedPartner.state && `, ${selectedPartner.state}`}
+                  </p>
+                )}
+              </div>
+
+              {/* Editable Contact Fields */}
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_contact_name">Contact Name</Label>
+                  <Input
+                    id="edit_contact_name"
+                    name="contact_name"
+                    value={editFormData.contact_name}
+                    onChange={handleEditInputChange}
+                    placeholder="Contact person name"
+                    className="bg-secondary/50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_contact_email">Contact Email *</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="edit_contact_email"
+                      name="contact_email"
+                      type="email"
+                      value={editFormData.contact_email}
+                      onChange={handleEditInputChange}
+                      placeholder="contact@company.com"
+                      className="pl-10 bg-secondary/50"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_contact_phone">Contact Phone *</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="edit_contact_phone"
+                      name="contact_phone"
+                      value={editFormData.contact_phone}
+                      onChange={handleEditInputChange}
+                      placeholder="+234 800 123 4567"
+                      className="pl-10 bg-secondary/50"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Active/Inactive Toggle */}
+              <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Power className={`w-5 h-5 ${editFormData.is_active ? "text-success" : "text-muted-foreground"}`} />
+                  <div>
+                    <Label htmlFor="is_active" className="text-sm font-medium">Partner Status</Label>
+                    <p className="text-xs text-muted-foreground">
+                      {editFormData.is_active ? "This partner is active and available for assignments" : "This partner is inactive and won't appear in selections"}
+                    </p>
+                  </div>
+                </div>
+                <Switch
+                  id="is_active"
+                  checked={editFormData.is_active}
+                  onCheckedChange={(checked) => setEditFormData(prev => ({ ...prev, is_active: checked }))}
+                />
+              </div>
+
+              {/* Verification Status (read-only display) */}
+              <div className="flex items-center gap-2 text-sm">
+                {selectedPartner.is_verified ? (
+                  <>
+                    <CheckCircle className="w-4 h-4 text-success" />
+                    <span className="text-success">Verified Partner</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">Not Verified</span>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-6">
+            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleUpdatePartner} disabled={saving}>
+              {saving ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Partners Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {loading ? (
@@ -644,10 +894,15 @@ const Partners = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {partner.is_active === false && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-destructive/15 text-destructive">
+                      Inactive
+                    </span>
+                  )}
                   {partner.is_verified ? (
-                    <CheckCircle className="w-5 h-5 text-success" />
+                    <CheckCircle className="w-5 h-5 text-success" title="Verified" />
                   ) : (
-                    <XCircle className="w-5 h-5 text-muted-foreground" />
+                    <XCircle className="w-5 h-5 text-muted-foreground" title="Not Verified" />
                   )}
                   <Button variant="ghost" size="icon">
                     <MoreVertical className="w-4 h-4" />
@@ -694,12 +949,22 @@ const Partners = () => {
               </div>
 
               <div className="flex gap-2 mt-4">
-                <Button variant="outline" size="sm" className="flex-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => handleViewPartner(partner)}
+                >
                   View Details
                 </Button>
-                {!partner.is_verified && canManage && (
-                  <Button size="sm" className="flex-1">
-                    Verify
+                {canManage && (
+                  <Button
+                    size="sm"
+                    variant={partner.is_active !== false ? "outline" : "default"}
+                    className={`flex-1 ${partner.is_active !== false ? "text-destructive hover:text-destructive" : ""}`}
+                    onClick={() => handleToggleActive(partner)}
+                  >
+                    {partner.is_active !== false ? "Deactivate" : "Activate"}
                   </Button>
                 )}
               </div>

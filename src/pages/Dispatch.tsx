@@ -84,7 +84,14 @@ interface Dispatch {
   driver_id: string | null;
   created_at: string;
   drivers?: { full_name: string } | null;
-  vehicles?: { registration_number: string; vehicle_type: string; capacity_kg: number | null } | null;
+  vehicles?: {
+    registration_number: string;
+    vehicle_type: string;
+    capacity_kg: number | null;
+    fleet_type?: string | null;
+    vendor_id?: string | null;
+    vendor?: { id: string; company_name: string } | null;
+  } | null;
   customers?: { company_name: string } | null;
 }
 
@@ -209,7 +216,7 @@ const DispatchPage = () => {
           .select(`
             *,
             drivers (full_name),
-            vehicles (registration_number, vehicle_type, capacity_kg),
+            vehicles (registration_number, vehicle_type, capacity_kg, fleet_type, vendor_id, vendor:vendor_id (id, company_name)),
             customers (company_name)
           `)
           .order("created_at", { ascending: false }),
@@ -1587,7 +1594,7 @@ const DispatchPage = () => {
             title: "Success",
             description: "Financial details saved and will sync to Google Sheets",
           });
-          fetchDispatches();
+          fetchData();
         }}
       />
     </DashboardLayout>

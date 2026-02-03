@@ -395,80 +395,121 @@ async function exportTransactions(supabase: any, accessToken: string, config: Sh
 
   if (error) throw error;
 
-  // Headers matching the original Google Sheet format (50+ columns)
-  // Order matches: "All Month breakdown All Biz" sheet
+  // Headers matching the ACTUAL Google Sheet format (52 columns)
+  // Order matches: "All Month breakdown All Biz" sheet - verified against user's actual sheet
   const headers = [
-    'Transaction Type', 'Date', 'Customer Name', 'Week Num', 'Month', 'Month Name', 'Year',
-    '3PL Vendor', 'Pick off', 'Drop point', 'Route Cluster', 'KM Covered', 'Tonnage Loaded',
-    'Driver name', 'Tonnage', 'Truck number', 'Waybill No', 'No of Customers/Deliveries',
-    'AMOUNT (VATABLE)', 'Amount (Not Vatable)', 'Amount', 'Extra drop off', 'Cost per Extra dropoff',
-    'Total Vendor Cost (+ VAT)', 'Sub-Total', 'Total Vat on Invoice',
-    'Total Rev Vat Incl', 'Gross Profit', 'WHT Payment status', 'Vendor Bill number',
-    'Vendor Invoice Status', 'Customer Payment status', 'Invoice Status', 'Payment Receipt date',
-    'WHT deducted', 'Bank Payment was received', 'Bank Debited', 'Invoice Amount Paid',
-    'Customer Invoice - Balance Owed', 'Invoice date', 'Customer Invoice Number', 'Payment Terms(Days)', 'Due date',
-    'Invoice Paid Date', 'Gap In Payment', 'Invoice Ageing', 'Vendor invoice submission date',
-    'Invoice Age(For Interest Calculation)', 'Daily Rate', 'Total Interest on Cash - Paid',
-    'Total Interest on Cash - NotPaid'
+    'Transaction Type',           // 1
+    'Date',                       // 2
+    'Customer Name',              // 3
+    'Week Num',                   // 4
+    'Month',                      // 5
+    'Month Name',                 // 6
+    'Year',                       // 7
+    '3PL Vendor',                 // 8
+    'Pick off',                   // 9
+    'Drop point',                 // 10
+    'Route Clauster',             // 11 - Note: typo in original sheet
+    'KM Covered',                 // 12
+    'Tonnage Loaded',             // 13
+    'Driver name',                // 14
+    'Tonnage',                    // 15
+    'Truck number',               // 16
+    'Waybill No',                 // 17
+    'No of Customers /Deliveries', // 18
+    'AMOUNT (VATABLE)',           // 19
+    'Amount (Not Vatable)',       // 20
+    'Amount',                     // 21
+    'Extra drop off',             // 22
+    'Cost per Extra dropoff',     // 23
+    'Total Vendor Cost (+ VAT)',  // 24
+    'Sub-Total',                  // 25
+    'Total Vat on Invoice',       // 26
+    'Customer Invoice Number',    // 27 - First occurrence (invoice_number)
+    'Total Rev Vat Incl',         // 28
+    'Gross Profit',               // 29
+    'WHT Payment status',         // 30
+    'Vendor Bill number',         // 31
+    'Vendor Invoice Status',      // 32
+    'Customer Payment status',    // 33
+    'Invoice Status',             // 34
+    'Payment Reciept date',       // 35 - Note: typo in original sheet
+    'WHT deducted',               // 36
+    'Bank Payment was recieved',  // 37 - Note: typo in original sheet
+    'Bank Debited',               // 38
+    'Invoice Amount Paid',        // 39
+    'Cutomer Invoice - Balance Owed', // 40 - Note: typo in original sheet
+    'Invoice date',               // 41
+    'Customer Invoice Number',    // 42 - Second occurrence (duplicate)
+    'Payment Terms(Days)',        // 43
+    'Due date',                   // 44
+    'Invoice Paid Date',          // 45
+    'Gap In Payment',             // 46
+    'Invoice Ageing',             // 47
+    'Vendor invoice submission date', // 48
+    'Invoice Age(For Intrest Calculation)', // 49 - Note: typo in original sheet
+    'Daily Rate',                 // 50
+    'Total Interest on Cash - Paid', // 51
+    'Total Interest on Cash - NotPaid' // 52
   ];
 
   // Month names for conversion
   const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
 
-  // Prepare data rows - order matches "All Month breakdown All Biz" sheet
+  // Prepare data rows - order matches ACTUAL "All Month breakdown All Biz" sheet (52 columns)
   const rows = (transactions || []).map((t: any) => [
-    t.transaction_type || '',
-    t.transaction_date || '',
-    t.customer_name || '',
-    t.week_num || t.week_number || '',  // Support both column names
-    t.period_month || '',
-    t.month_name || monthNames[t.period_month] || '',
-    t.period_year || '',
-    t.vendor_name || '',
-    t.pick_off || t.pickup_location || '',
-    t.drop_point || t.delivery_location || '',  // Support both column names
-    t.route_cluster || '',
-    t.km_covered || '',
-    t.tonnage_loaded || '',
-    t.driver_name || '',
-    t.tonnage || '',
-    t.truck_number || '',
-    t.waybill_number || '',
-    t.num_deliveries || t.trips_count || '',
-    t.amount_vatable || '',
-    t.amount_not_vatable || '',
-    t.total_amount || t.total_revenue || '',
-    t.extra_dropoffs || '',
-    t.extra_dropoff_cost || '',
-    t.total_vendor_cost || t.vendor_cost || t.total_cost || '',  // Support all cost column names
-    t.sub_total || '',
-    t.vat_amount || '',
-    t.total_revenue || '',
-    t.gross_profit || '',
-    t.wht_status || '',
-    t.vendor_bill_number || '',
-    t.vendor_invoice_status || '',
-    t.customer_payment_status || '',
-    t.invoice_status || '',
-    t.payment_receipt_date || '',
-    t.wht_deducted || '',
-    t.bank_payment_received || '',
-    t.bank_debited || '',
-    t.invoice_amount_paid || '',
-    t.balance_owed || '',
-    t.invoice_date || '',
-    t.invoice_number || '',  // Customer Invoice Number comes after Invoice date
-    t.payment_terms_days || '',
-    t.due_date || '',
-    t.invoice_paid_date || '',
-    t.gap_in_payment || '',
-    t.invoice_ageing || '',
-    t.vendor_invoice_submission_date || '',
-    t.invoice_age_for_interest || '',
-    t.daily_rate || '',
-    t.interest_paid || '',
-    t.interest_not_paid || '',
+    t.transaction_type || '',                              // 1: Transaction Type
+    t.transaction_date || '',                              // 2: Date
+    t.customer_name || '',                                 // 3: Customer Name
+    t.week_num || t.week_number || '',                     // 4: Week Num
+    t.period_month || '',                                  // 5: Month
+    t.month_name || monthNames[t.period_month] || '',      // 6: Month Name
+    t.period_year || '',                                   // 7: Year
+    t.vendor_name || '',                                   // 8: 3PL Vendor
+    t.pick_off || t.pickup_location || '',                 // 9: Pick off
+    t.drop_point || t.delivery_location || '',             // 10: Drop point
+    t.route_cluster || '',                                 // 11: Route Clauster
+    t.km_covered || '',                                    // 12: KM Covered
+    t.tonnage_loaded || '',                                // 13: Tonnage Loaded
+    t.driver_name || '',                                   // 14: Driver name
+    t.tonnage || '',                                       // 15: Tonnage
+    t.truck_number || '',                                  // 16: Truck number
+    t.waybill_number || '',                                // 17: Waybill No
+    t.num_deliveries || t.trips_count || '',               // 18: No of Customers/Deliveries
+    t.amount_vatable || '',                                // 19: AMOUNT (VATABLE)
+    t.amount_not_vatable || '',                            // 20: Amount (Not Vatable)
+    t.total_amount || '',                                  // 21: Amount
+    t.extra_dropoffs || '',                                // 22: Extra drop off
+    t.extra_dropoff_cost || '',                            // 23: Cost per Extra dropoff
+    t.total_vendor_cost || t.total_cost || '',             // 24: Total Vendor Cost (+ VAT)
+    t.sub_total || '',                                     // 25: Sub-Total
+    t.vat_amount || '',                                    // 26: Total Vat on Invoice
+    t.invoice_number || '',                                // 27: Customer Invoice Number (1st)
+    t.total_revenue || '',                                 // 28: Total Rev Vat Incl
+    t.gross_profit || '',                                  // 29: Gross Profit
+    t.wht_status || '',                                    // 30: WHT Payment status
+    t.vendor_bill_number || '',                            // 31: Vendor Bill number
+    t.vendor_invoice_status || '',                         // 32: Vendor Invoice Status
+    t.customer_payment_status || '',                       // 33: Customer Payment status
+    t.invoice_status || '',                                // 34: Invoice Status
+    t.payment_receipt_date || '',                          // 35: Payment Reciept date
+    t.wht_deducted || '',                                  // 36: WHT deducted
+    t.bank_payment_received || '',                         // 37: Bank Payment was recieved
+    t.bank_debited || '',                                  // 38: Bank Debited
+    t.invoice_amount_paid || '',                           // 39: Invoice Amount Paid
+    t.balance_owed || '',                                  // 40: Cutomer Invoice - Balance Owed
+    t.invoice_date || '',                                  // 41: Invoice date
+    t.invoice_number || '',                                // 42: Customer Invoice Number (2nd - duplicate)
+    t.payment_terms_days || '',                            // 43: Payment Terms(Days)
+    t.due_date || '',                                      // 44: Due date
+    t.invoice_paid_date || '',                             // 45: Invoice Paid Date
+    t.gap_in_payment || '',                                // 46: Gap In Payment
+    t.invoice_ageing || '',                                // 47: Invoice Ageing
+    t.vendor_invoice_submission_date || '',                // 48: Vendor invoice submission date
+    t.invoice_age_for_interest || '',                      // 49: Invoice Age(For Intrest Calculation)
+    t.daily_rate || '',                                    // 50: Daily Rate
+    t.interest_paid || '',                                 // 51: Total Interest on Cash - Paid
+    t.interest_not_paid || '',                             // 52: Total Interest on Cash - NotPaid
   ]);
 
   // Clear and update sheet
@@ -645,7 +686,7 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
         pick_off: getVal(row, 'pick off'),
         delivery_location: getVal(row, 'drop point', 'delivery', 'delivery location'),
         drop_point: getVal(row, 'drop point'),
-        route_cluster: getVal(row, 'route cluster', 'route clauster'),
+        route_cluster: getVal(row, 'route cluster', 'route clauster', 'route'),
         km_covered: parseNum(getVal(row, 'km covered', 'distance')),
 
         // Vehicle & driver info
@@ -689,7 +730,7 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
         payment_receipt_date: parseDate(getVal(row, 'payment receipt date', 'payment reciept date')),
         invoice_paid_date: parseDate(getVal(row, 'invoice paid date', 'paid date')),
         invoice_amount_paid: parseNum(getVal(row, 'invoice amount paid', 'amount paid')),
-        balance_owed: parseNum(getVal(row, 'customer invoice - balance owed', 'balance owed')),
+        balance_owed: parseNum(getVal(row, 'customer invoice - balance owed', 'cutomer invoice - balance owed', 'balance owed')),
 
         // WHT (Withholding Tax)
         wht_status: getVal(row, 'wht payment status'),
@@ -951,60 +992,61 @@ async function appendTransaction(supabase: any, accessToken: string, config: She
   const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
 
-  // Create row data matching the Google Sheet format (same as exportTransactions)
+  // Create row data matching the ACTUAL Google Sheet format (52 columns - same as exportTransactions)
   const t = transaction;
   const rowData = [
-    t.transaction_type || '',
-    t.transaction_date || '',
-    t.customer_name || '',
-    t.week_num || t.week_number || '',
-    t.period_month || '',
-    t.month_name || monthNames[t.period_month] || '',
-    t.period_year || '',
-    t.vendor_name || '',
-    t.pick_off || t.pickup_location || '',
-    t.drop_point || t.delivery_location || '',
-    t.route_cluster || '',
-    t.km_covered || '',
-    t.tonnage_loaded || '',
-    t.driver_name || '',
-    t.tonnage || '',
-    t.truck_number || '',
-    t.waybill_number || '',
-    t.num_deliveries || t.trips_count || '',
-    t.amount_vatable || '',
-    t.amount_not_vatable || '',
-    t.total_amount || t.total_revenue || '',
-    t.extra_dropoffs || '',
-    t.extra_dropoff_cost || '',
-    t.total_vendor_cost || t.vendor_cost || t.total_cost || '',
-    t.sub_total || '',
-    t.vat_amount || '',
-    t.total_revenue || '',
-    t.gross_profit || '',
-    t.wht_status || '',
-    t.vendor_bill_number || '',
-    t.vendor_invoice_status || '',
-    t.customer_payment_status || '',
-    t.invoice_status || '',
-    t.payment_receipt_date || '',
-    t.wht_deducted || '',
-    t.bank_payment_received || '',
-    t.bank_debited || '',
-    t.invoice_amount_paid || '',
-    t.balance_owed || '',
-    t.invoice_date || '',
-    t.invoice_number || '',
-    t.payment_terms_days || '',
-    t.due_date || '',
-    t.invoice_paid_date || '',
-    t.gap_in_payment || '',
-    t.invoice_ageing || '',
-    t.vendor_invoice_submission_date || '',
-    t.invoice_age_for_interest || '',
-    t.daily_rate || '',
-    t.interest_paid || '',
-    t.interest_not_paid || '',
+    t.transaction_type || '',                              // 1: Transaction Type
+    t.transaction_date || '',                              // 2: Date
+    t.customer_name || '',                                 // 3: Customer Name
+    t.week_num || t.week_number || '',                     // 4: Week Num
+    t.period_month || '',                                  // 5: Month
+    t.month_name || monthNames[t.period_month] || '',      // 6: Month Name
+    t.period_year || '',                                   // 7: Year
+    t.vendor_name || '',                                   // 8: 3PL Vendor
+    t.pick_off || t.pickup_location || '',                 // 9: Pick off
+    t.drop_point || t.delivery_location || '',             // 10: Drop point
+    t.route_cluster || '',                                 // 11: Route Clauster
+    t.km_covered || '',                                    // 12: KM Covered
+    t.tonnage_loaded || '',                                // 13: Tonnage Loaded
+    t.driver_name || '',                                   // 14: Driver name
+    t.tonnage || '',                                       // 15: Tonnage
+    t.truck_number || '',                                  // 16: Truck number
+    t.waybill_number || '',                                // 17: Waybill No
+    t.num_deliveries || t.trips_count || '',               // 18: No of Customers/Deliveries
+    t.amount_vatable || '',                                // 19: AMOUNT (VATABLE)
+    t.amount_not_vatable || '',                            // 20: Amount (Not Vatable)
+    t.total_amount || '',                                  // 21: Amount
+    t.extra_dropoffs || '',                                // 22: Extra drop off
+    t.extra_dropoff_cost || '',                            // 23: Cost per Extra dropoff
+    t.total_vendor_cost || t.total_cost || '',             // 24: Total Vendor Cost (+ VAT)
+    t.sub_total || '',                                     // 25: Sub-Total
+    t.vat_amount || '',                                    // 26: Total Vat on Invoice
+    t.invoice_number || '',                                // 27: Customer Invoice Number (1st)
+    t.total_revenue || '',                                 // 28: Total Rev Vat Incl
+    t.gross_profit || '',                                  // 29: Gross Profit
+    t.wht_status || '',                                    // 30: WHT Payment status
+    t.vendor_bill_number || '',                            // 31: Vendor Bill number
+    t.vendor_invoice_status || '',                         // 32: Vendor Invoice Status
+    t.customer_payment_status || '',                       // 33: Customer Payment status
+    t.invoice_status || '',                                // 34: Invoice Status
+    t.payment_receipt_date || '',                          // 35: Payment Reciept date
+    t.wht_deducted || '',                                  // 36: WHT deducted
+    t.bank_payment_received || '',                         // 37: Bank Payment was recieved
+    t.bank_debited || '',                                  // 38: Bank Debited
+    t.invoice_amount_paid || '',                           // 39: Invoice Amount Paid
+    t.balance_owed || '',                                  // 40: Cutomer Invoice - Balance Owed
+    t.invoice_date || '',                                  // 41: Invoice date
+    t.invoice_number || '',                                // 42: Customer Invoice Number (2nd - duplicate)
+    t.payment_terms_days || '',                            // 43: Payment Terms(Days)
+    t.due_date || '',                                      // 44: Due date
+    t.invoice_paid_date || '',                             // 45: Invoice Paid Date
+    t.gap_in_payment || '',                                // 46: Gap In Payment
+    t.invoice_ageing || '',                                // 47: Invoice Ageing
+    t.vendor_invoice_submission_date || '',                // 48: Vendor invoice submission date
+    t.invoice_age_for_interest || '',                      // 49: Invoice Age(For Intrest Calculation)
+    t.daily_rate || '',                                    // 50: Daily Rate
+    t.interest_paid || '',                                 // 51: Total Interest on Cash - Paid
+    t.interest_not_paid || '',                             // 52: Total Interest on Cash - NotPaid
   ];
 
   // Append the row to the sheet
