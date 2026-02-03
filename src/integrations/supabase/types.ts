@@ -1019,30 +1019,43 @@ export type Database = {
         Row: {
           amount_not_vatable: number | null
           amount_vatable: number | null
+          balance_owed: number | null
+          bank_debited: string | null
+          bank_payment_received: string | null
           customer_id: string | null
           customer_name: string
           customer_payment_status: string | null
+          daily_rate: number | null
           delivery_location: string | null
+          dispatch_id: string | null
           driver_name: string | null
           drop_point: string | null
           due_date: string | null
           extra_dropoff_cost: number | null
           extra_dropoffs: number | null
+          gap_in_payment: number | null
           gross_profit: number | null
           id: string
           imported_at: string
           imported_by: string | null
+          interest_not_paid: number | null
+          interest_paid: number | null
+          invoice_age_for_interest: number | null
+          invoice_ageing: number | null
+          invoice_amount_paid: number | null
           invoice_date: string | null
           invoice_number: string | null
           invoice_paid_date: string | null
           invoice_status: string | null
           km_covered: number | null
+          month_name: string | null
           notes: string | null
           num_deliveries: number | null
           payment_receipt_date: string | null
           payment_terms_days: number | null
           period_month: number
           period_year: number
+          pick_off: string | null
           pickup_location: string | null
           profit_margin: number | null
           route: string | null
@@ -1051,6 +1064,7 @@ export type Database = {
           sub_total: number | null
           tonnage: string | null
           tonnage_loaded: number | null
+          total_amount: number | null
           total_cost: number | null
           total_revenue: number | null
           total_vendor_cost: number | null
@@ -1063,38 +1077,54 @@ export type Database = {
           vendor_bill_number: string | null
           vendor_id: string | null
           vendor_invoice_status: string | null
+          vendor_invoice_submission_date: string | null
           vendor_name: string | null
+          waybill_number: string | null
           waybill_numbers: string[] | null
           week_num: number | null
+          wht_deducted: number | null
           wht_status: string | null
         }
         Insert: {
           amount_not_vatable?: number | null
           amount_vatable?: number | null
+          balance_owed?: number | null
+          bank_debited?: string | null
+          bank_payment_received?: string | null
           customer_id?: string | null
           customer_name: string
           customer_payment_status?: string | null
+          daily_rate?: number | null
           delivery_location?: string | null
+          dispatch_id?: string | null
           driver_name?: string | null
           drop_point?: string | null
           due_date?: string | null
           extra_dropoff_cost?: number | null
           extra_dropoffs?: number | null
+          gap_in_payment?: number | null
           gross_profit?: number | null
           id?: string
           imported_at?: string
           imported_by?: string | null
+          interest_not_paid?: number | null
+          interest_paid?: number | null
+          invoice_age_for_interest?: number | null
+          invoice_ageing?: number | null
+          invoice_amount_paid?: number | null
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_paid_date?: string | null
           invoice_status?: string | null
           km_covered?: number | null
+          month_name?: string | null
           notes?: string | null
           num_deliveries?: number | null
           payment_receipt_date?: string | null
           payment_terms_days?: number | null
           period_month: number
           period_year: number
+          pick_off?: string | null
           pickup_location?: string | null
           profit_margin?: number | null
           route?: string | null
@@ -1103,6 +1133,7 @@ export type Database = {
           sub_total?: number | null
           tonnage?: string | null
           tonnage_loaded?: number | null
+          total_amount?: number | null
           total_cost?: number | null
           total_revenue?: number | null
           total_vendor_cost?: number | null
@@ -1115,38 +1146,54 @@ export type Database = {
           vendor_bill_number?: string | null
           vendor_id?: string | null
           vendor_invoice_status?: string | null
+          vendor_invoice_submission_date?: string | null
           vendor_name?: string | null
+          waybill_number?: string | null
           waybill_numbers?: string[] | null
           week_num?: number | null
+          wht_deducted?: number | null
           wht_status?: string | null
         }
         Update: {
           amount_not_vatable?: number | null
           amount_vatable?: number | null
+          balance_owed?: number | null
+          bank_debited?: string | null
+          bank_payment_received?: string | null
           customer_id?: string | null
           customer_name?: string
           customer_payment_status?: string | null
+          daily_rate?: number | null
           delivery_location?: string | null
+          dispatch_id?: string | null
           driver_name?: string | null
           drop_point?: string | null
           due_date?: string | null
           extra_dropoff_cost?: number | null
           extra_dropoffs?: number | null
+          gap_in_payment?: number | null
           gross_profit?: number | null
           id?: string
           imported_at?: string
           imported_by?: string | null
+          interest_not_paid?: number | null
+          interest_paid?: number | null
+          invoice_age_for_interest?: number | null
+          invoice_ageing?: number | null
+          invoice_amount_paid?: number | null
           invoice_date?: string | null
           invoice_number?: string | null
           invoice_paid_date?: string | null
           invoice_status?: string | null
           km_covered?: number | null
+          month_name?: string | null
           notes?: string | null
           num_deliveries?: number | null
           payment_receipt_date?: string | null
           payment_terms_days?: number | null
           period_month?: number
           period_year?: number
+          pick_off?: string | null
           pickup_location?: string | null
           profit_margin?: number | null
           route?: string | null
@@ -1155,6 +1202,7 @@ export type Database = {
           sub_total?: number | null
           tonnage?: string | null
           tonnage_loaded?: number | null
+          total_amount?: number | null
           total_cost?: number | null
           total_revenue?: number | null
           total_vendor_cost?: number | null
@@ -1167,9 +1215,12 @@ export type Database = {
           vendor_bill_number?: string | null
           vendor_id?: string | null
           vendor_invoice_status?: string | null
+          vendor_invoice_submission_date?: string | null
           vendor_name?: string | null
+          waybill_number?: string | null
           waybill_numbers?: string[] | null
           week_num?: number | null
+          wht_deducted?: number | null
           wht_status?: string | null
         }
         Relationships: [

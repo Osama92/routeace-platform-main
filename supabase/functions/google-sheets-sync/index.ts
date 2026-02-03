@@ -19,7 +19,7 @@ interface GoogleTokenResponse {
 interface SheetConfig {
   spreadsheet_id: string;
   sheet_name: string;
-  data_type: 'dispatches' | 'customers' | 'drivers' | 'vehicles' | 'invoices' | 'expenses';
+  data_type: 'dispatches' | 'customers' | 'drivers' | 'vehicles' | 'invoices' | 'expenses' | 'transactions';
   sync_direction: 'export' | 'import' | 'both';
 }
 
@@ -57,7 +57,9 @@ async function getGoogleAccessToken(): Promise<string> {
 
 // Get sheet data
 async function getSheetData(accessToken: string, spreadsheetId: string, sheetName: string): Promise<any[][]> {
-  const range = encodeURIComponent(`${sheetName}!A:Z`);
+  // Use single quotes around sheet name to handle spaces and special characters
+  // Extended range to BZ (78 columns) to support 50+ fields
+  const range = encodeURIComponent(`'${sheetName}'!A:BZ`);
   const response = await fetch(
     `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${range}`,
     {
@@ -82,7 +84,8 @@ async function updateSheetData(
   values: any[][],
   startRow: number = 1
 ): Promise<void> {
-  const range = encodeURIComponent(`${sheetName}!A${startRow}`);
+  // Use single quotes around sheet name to handle spaces and special characters
+  const range = encodeURIComponent(`'${sheetName}'!A${startRow}`);
 
   const response = await fetch(
     `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
@@ -109,7 +112,8 @@ async function appendToSheet(
   sheetName: string,
   values: any[][]
 ): Promise<void> {
-  const range = encodeURIComponent(`${sheetName}!A:Z`);
+  // Use single quotes around sheet name and extended range for 50+ columns
+  const range = encodeURIComponent(`'${sheetName}'!A:BZ`);
 
   const response = await fetch(
     `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
@@ -135,7 +139,8 @@ async function clearSheet(
   spreadsheetId: string,
   sheetName: string
 ): Promise<void> {
-  const range = encodeURIComponent(`${sheetName}!A2:Z10000`);
+  // Use single quotes around sheet name and extended range for 50+ columns
+  const range = encodeURIComponent(`'${sheetName}'!A2:BZ10000`);
 
   const response = await fetch(
     `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${range}:clear`,
@@ -379,6 +384,404 @@ async function exportExpenses(supabase: any, accessToken: string, config: SheetC
   return { exported: rows.length };
 }
 
+// Export transactions (historical_invoice_data) to Google Sheets - Full 50+ field coverage
+async function exportTransactions(supabase: any, accessToken: string, config: SheetConfig) {
+  const { data: transactions, error } = await supabase
+    .from('historical_invoice_data')
+    .select('*')
+    .order('period_year', { ascending: false })
+    .order('period_month', { ascending: false })
+    .order('transaction_date', { ascending: false });
+
+  if (error) throw error;
+
+  // Headers matching the original Google Sheet format (50+ columns)
+  // Order matches: "All Month breakdown All Biz" sheet
+  const headers = [
+    'Transaction Type', 'Date', 'Customer Name', 'Week Num', 'Month', 'Month Name', 'Year',
+    '3PL Vendor', 'Pick off', 'Drop point', 'Route Cluster', 'KM Covered', 'Tonnage Loaded',
+    'Driver name', 'Tonnage', 'Truck number', 'Waybill No', 'No of Customers/Deliveries',
+    'AMOUNT (VATABLE)', 'Amount (Not Vatable)', 'Amount', 'Extra drop off', 'Cost per Extra dropoff',
+    'Total Vendor Cost (+ VAT)', 'Sub-Total', 'Total Vat on Invoice',
+    'Total Rev Vat Incl', 'Gross Profit', 'WHT Payment status', 'Vendor Bill number',
+    'Vendor Invoice Status', 'Customer Payment status', 'Invoice Status', 'Payment Receipt date',
+    'WHT deducted', 'Bank Payment was received', 'Bank Debited', 'Invoice Amount Paid',
+    'Customer Invoice - Balance Owed', 'Invoice date', 'Customer Invoice Number', 'Payment Terms(Days)', 'Due date',
+    'Invoice Paid Date', 'Gap In Payment', 'Invoice Ageing', 'Vendor invoice submission date',
+    'Invoice Age(For Interest Calculation)', 'Daily Rate', 'Total Interest on Cash - Paid',
+    'Total Interest on Cash - NotPaid'
+  ];
+
+  // Month names for conversion
+  const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  // Prepare data rows - order matches "All Month breakdown All Biz" sheet
+  const rows = (transactions || []).map((t: any) => [
+    t.transaction_type || '',
+    t.transaction_date || '',
+    t.customer_name || '',
+    t.week_num || t.week_number || '',  // Support both column names
+    t.period_month || '',
+    t.month_name || monthNames[t.period_month] || '',
+    t.period_year || '',
+    t.vendor_name || '',
+    t.pick_off || t.pickup_location || '',
+    t.drop_point || t.delivery_location || '',  // Support both column names
+    t.route_cluster || '',
+    t.km_covered || '',
+    t.tonnage_loaded || '',
+    t.driver_name || '',
+    t.tonnage || '',
+    t.truck_number || '',
+    t.waybill_number || '',
+    t.num_deliveries || t.trips_count || '',
+    t.amount_vatable || '',
+    t.amount_not_vatable || '',
+    t.total_amount || t.total_revenue || '',
+    t.extra_dropoffs || '',
+    t.extra_dropoff_cost || '',
+    t.total_vendor_cost || t.vendor_cost || t.total_cost || '',  // Support all cost column names
+    t.sub_total || '',
+    t.vat_amount || '',
+    t.total_revenue || '',
+    t.gross_profit || '',
+    t.wht_status || '',
+    t.vendor_bill_number || '',
+    t.vendor_invoice_status || '',
+    t.customer_payment_status || '',
+    t.invoice_status || '',
+    t.payment_receipt_date || '',
+    t.wht_deducted || '',
+    t.bank_payment_received || '',
+    t.bank_debited || '',
+    t.invoice_amount_paid || '',
+    t.balance_owed || '',
+    t.invoice_date || '',
+    t.invoice_number || '',  // Customer Invoice Number comes after Invoice date
+    t.payment_terms_days || '',
+    t.due_date || '',
+    t.invoice_paid_date || '',
+    t.gap_in_payment || '',
+    t.invoice_ageing || '',
+    t.vendor_invoice_submission_date || '',
+    t.invoice_age_for_interest || '',
+    t.daily_rate || '',
+    t.interest_paid || '',
+    t.interest_not_paid || '',
+  ]);
+
+  // Clear and update sheet
+  await clearSheet(accessToken, config.spreadsheet_id, config.sheet_name);
+  await updateSheetData(accessToken, config.spreadsheet_id, config.sheet_name, [headers, ...rows]);
+
+  return { exported: rows.length };
+}
+
+// Import transactions from Google Sheets - Full 50+ field coverage
+async function importTransactions(supabase: any, accessToken: string, config: SheetConfig) {
+  console.log('Starting importTransactions with sheet:', config.sheet_name);
+
+  const rows = await getSheetData(accessToken, config.spreadsheet_id, config.sheet_name);
+  console.log('Rows fetched:', rows.length);
+
+  if (rows.length < 2) {
+    return { imported: 0, skipped: 0, errors: [], debug: { message: 'Less than 2 rows in sheet', rowCount: rows.length } };
+  }
+
+  // Auto-detect header row - find the first row that contains key headers
+  // Check first 20 rows for headers (some sheets have title/summary rows at top)
+  let headerRowIndex = -1;
+  const headerKeywords = ['customer name', 'customer', 'year', 'month', 'transaction type', 'date'];
+
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const row = rows[i] || [];
+    // Skip completely empty rows
+    if (row.length === 0 || row.every((cell: any) => !cell || String(cell).trim() === '')) {
+      continue;
+    }
+
+    const rowLower = row.map((cell: any) => String(cell || '').toLowerCase().trim());
+    // Count how many header keywords are found in this row
+    const matchCount = headerKeywords.filter(keyword => rowLower.includes(keyword)).length;
+
+    // If we find at least 2 header keywords, this is likely the header row
+    if (matchCount >= 2) {
+      headerRowIndex = i;
+      console.log(`Header row found at index ${i} with ${matchCount} keyword matches:`, row.slice(0, 5));
+      break;
+    }
+  }
+
+  // If no header row found, return with debug info
+  if (headerRowIndex === -1) {
+    // Show first few non-empty rows for debugging
+    const sampleRows = rows.slice(0, 5).map((r: any[], idx: number) => ({
+      row: idx + 1,
+      firstCells: (r || []).slice(0, 5).map((c: any) => String(c || '').substring(0, 20))
+    }));
+    return {
+      imported: 0,
+      skipped: 0,
+      errors: ['Could not find header row with expected columns (Customer Name, Year, Month, etc.)'],
+      debug: {
+        message: 'Header row not detected in first 20 rows',
+        totalRows: rows.length,
+        sampleRows: sampleRows,
+        sheetName: config.sheet_name
+      }
+    };
+  }
+
+  const headers = rows[headerRowIndex].map((h: string) => h?.toLowerCase()?.trim() || '');
+  const dataRows = rows.slice(headerRowIndex + 1);
+
+  console.log('Header row index:', headerRowIndex);
+  console.log('Headers found:', headers.slice(0, 10)); // Log first 10 headers
+  console.log('Data rows count:', dataRows.length);
+
+  // Month name to number mapping
+  const monthNameToNum: Record<string, number> = {
+    'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+    'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+  };
+
+  // Helper to get column value by header variations
+  const getVal = (row: any[], ...headerVariants: string[]): string | null => {
+    for (const h of headerVariants) {
+      const idx = headers.indexOf(h.toLowerCase());
+      if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
+        return row[idx];
+      }
+    }
+    return null;
+  };
+
+  const parseNum = (val: string | null): number | null => {
+    if (!val) return null;
+    const num = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+    return isNaN(num) ? null : num;
+  };
+
+  const parseDate = (val: string | null): string | null => {
+    if (!val) return null;
+    try {
+      const date = new Date(val);
+      if (isNaN(date.getTime())) return null;
+      return date.toISOString().split('T')[0];
+    } catch {
+      return null;
+    }
+  };
+
+  let imported = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+  const skipReasons: string[] = [];
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    try {
+      const customerName = getVal(row, 'customer name', 'customer');
+
+      // Try to get year/month from dedicated columns first
+      let year = parseNum(getVal(row, 'year'));
+      let month = parseNum(getVal(row, 'month')) ||
+        monthNameToNum[getVal(row, 'month name')?.toLowerCase() || ''];
+
+      // If year or month is missing, try to extract from the date column
+      const dateVal = getVal(row, 'date', 'transaction date');
+      if (dateVal && (!year || !month)) {
+        const parsedDate = parseDate(dateVal);
+        if (parsedDate) {
+          const dateObj = new Date(parsedDate);
+          if (!year) year = dateObj.getFullYear();
+          if (!month) month = dateObj.getMonth() + 1; // getMonth() is 0-indexed
+        }
+      }
+
+      // Skip rows without customer name (likely empty or summary rows)
+      if (!customerName) {
+        if (skipReasons.length < 5) {
+          skipReasons.push(`Row ${i + 2}: customerName=${customerName} (empty row)`);
+        }
+        skipped++;
+        continue;
+      }
+
+      // If we still don't have year/month, log it but continue with null values
+      // This allows partial data import rather than skipping entirely
+      if (!year || !month) {
+        // Log skip reason for first few rows to help debug
+        if (skipReasons.length < 5) {
+          skipReasons.push(`Row ${i + 2}: customerName=${customerName}, year=${year}, month=${month} (missing period data, will use defaults)`);
+        }
+        // Use current year/month as fallback if we have other valid data
+        const now = new Date();
+        if (!year) year = now.getFullYear();
+        if (!month) month = now.getMonth() + 1;
+      }
+
+      // Month name helper
+      const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+
+      // Full 51 column support for historical_invoice_data table
+      const transactionData = {
+        // Required fields
+        customer_name: customerName,
+        period_year: year,
+        period_month: month,
+        month_name: getVal(row, 'month name') || monthNames[month] || '',
+
+        // Optional fields
+        vendor_name: getVal(row, '3pl vendor', 'vendor', 'vendor name'),
+        transaction_date: parseDate(getVal(row, 'date', 'transaction date')),
+        transaction_type: getVal(row, 'transaction type'),
+        week_num: parseNum(getVal(row, 'week num', 'week number')),
+
+        // Route & delivery details
+        pickup_location: getVal(row, 'pick off', 'pickup', 'pickup location'),
+        pick_off: getVal(row, 'pick off'),
+        delivery_location: getVal(row, 'drop point', 'delivery', 'delivery location'),
+        drop_point: getVal(row, 'drop point'),
+        route_cluster: getVal(row, 'route cluster', 'route clauster'),
+        km_covered: parseNum(getVal(row, 'km covered', 'distance')),
+
+        // Vehicle & driver info
+        truck_number: getVal(row, 'truck number', 'truck'),
+        driver_name: getVal(row, 'driver name', 'driver'),
+        tonnage: getVal(row, 'tonnage'),
+        tonnage_loaded: parseNum(getVal(row, 'tonnage loaded')),
+
+        // Trip details
+        waybill_number: getVal(row, 'waybill no', 'waybill number'),
+        trips_count: parseNum(getVal(row, 'no of customers/deliveries', 'trips')) || 1,
+        num_deliveries: parseNum(getVal(row, 'no of customers/deliveries', 'deliveries')),
+        extra_dropoffs: parseNum(getVal(row, 'extra drop off', 'extra dropoffs')),
+        extra_dropoff_cost: parseNum(getVal(row, 'cost per extra dropoff')),
+
+        // Revenue & cost breakdown
+        amount_vatable: parseNum(getVal(row, 'amount (vatable)', 'amount vatable')),
+        amount_not_vatable: parseNum(getVal(row, 'amount (not vatable)', 'amount not vatable')),
+        total_amount: parseNum(getVal(row, 'amount', 'total amount')),
+        total_revenue: parseNum(getVal(row, 'total rev vat incl', 'revenue')) || 0,
+        total_cost: parseNum(getVal(row, 'total vendor cost (+ vat)', 'vendor cost', 'cost')) || 0,
+        total_vendor_cost: parseNum(getVal(row, 'total vendor cost (+ vat)')),
+        vat_amount: parseNum(getVal(row, 'total vat on invoice', 'vat')),
+        sub_total: parseNum(getVal(row, 'sub-total', 'subtotal')),
+        gross_profit: parseNum(getVal(row, 'gross profit', 'profit')),
+
+        // Invoice information
+        invoice_number: getVal(row, 'customer invoice number', 'invoice number'),
+        invoice_date: parseDate(getVal(row, 'invoice date')),
+        invoice_status: getVal(row, 'invoice status'),
+        payment_terms_days: parseNum(getVal(row, 'payment terms(days)', 'payment terms')),
+        due_date: parseDate(getVal(row, 'due date')),
+
+        // Vendor billing
+        vendor_bill_number: getVal(row, 'vendor bill number'),
+        vendor_invoice_status: getVal(row, 'vendor invoice status'),
+        vendor_invoice_submission_date: parseDate(getVal(row, 'vendor invoice submission date')),
+
+        // Payment tracking
+        customer_payment_status: getVal(row, 'customer payment status', 'payment status'),
+        payment_receipt_date: parseDate(getVal(row, 'payment receipt date', 'payment reciept date')),
+        invoice_paid_date: parseDate(getVal(row, 'invoice paid date', 'paid date')),
+        invoice_amount_paid: parseNum(getVal(row, 'invoice amount paid', 'amount paid')),
+        balance_owed: parseNum(getVal(row, 'customer invoice - balance owed', 'balance owed')),
+
+        // WHT (Withholding Tax)
+        wht_status: getVal(row, 'wht payment status'),
+        wht_deducted: parseNum(getVal(row, 'wht deducted')),
+
+        // Bank info
+        bank_payment_received: getVal(row, 'bank payment was received', 'bank payment was recieved'),
+        bank_debited: getVal(row, 'bank debited'),
+
+        // Payment analysis
+        gap_in_payment: parseNum(getVal(row, 'gap in payment')),
+        invoice_ageing: parseNum(getVal(row, 'invoice ageing')),
+        invoice_age_for_interest: parseNum(getVal(row, 'invoice age(for interest calculation)', 'invoice age(for intrest calculation)')),
+
+        // Interest calculations
+        daily_rate: parseNum(getVal(row, 'daily rate')),
+        interest_paid: parseNum(getVal(row, 'total interest on cash - paid')),
+        interest_not_paid: parseNum(getVal(row, 'total interest on cash - notpaid')),
+      };
+
+      // Log first row's data for debugging
+      if (i === 0) {
+        console.log('First row transaction data:', JSON.stringify(transactionData, null, 2));
+      }
+
+      const { error } = await supabase
+        .from('historical_invoice_data')
+        .insert(transactionData);
+
+      if (error) {
+        console.error(`Row ${i + 2} insert error:`, error);
+        throw error;
+      }
+      imported++;
+    } catch (err: any) {
+      const errorMsg = err.message || err.details || JSON.stringify(err);
+      errors.push(`Row ${i + 2}: ${errorMsg}`);
+      skipped++;
+    }
+  }
+
+  // Include sample of first row data in debug for troubleshooting
+  let firstRowSample = null;
+  if (dataRows.length > 0) {
+    const row = dataRows[0];
+    firstRowSample = {
+      customer_name: getVal(row, 'customer name', 'customer'),
+      year: getVal(row, 'year'),
+      month: getVal(row, 'month'),
+      month_name: getVal(row, 'month name'),
+      date: getVal(row, 'date', 'transaction date'),
+      raw_first_10_cells: row?.slice(0, 10)
+    };
+  }
+
+  // Verify data was actually inserted by querying the count
+  const { count: totalCount, error: countError } = await supabase
+    .from('historical_invoice_data')
+    .select('*', { count: 'exact', head: true });
+
+  // Get a sample of recently inserted records
+  const { data: recentRecords, error: recentError } = await supabase
+    .from('historical_invoice_data')
+    .select('id, customer_name, period_year, period_month, total_revenue, imported_at')
+    .order('imported_at', { ascending: false })
+    .limit(3);
+
+  return {
+    imported,
+    skipped,
+    errors: errors.slice(0, 10), // Limit errors to first 10
+    debug: {
+      totalRows: rows.length,
+      headerRowIndex: headerRowIndex,
+      dataRows: dataRows.length,
+      headersFound: headers.slice(0, 15),
+      skipReasons: skipReasons,
+      sheetName: config.sheet_name,
+      firstRowSample: firstRowSample,
+      // Add error summary to debug for visibility
+      errorCount: errors.length,
+      firstError: errors[0] || 'No errors'
+    },
+    verification: {
+      totalRecordsInTable: totalCount,
+      countError: countError?.message || null,
+      recentlyImported: recentRecords || [],
+      recentError: recentError?.message || null
+    }
+  };
+}
+
 // Import customers from Google Sheets
 async function importCustomers(supabase: any, accessToken: string, config: SheetConfig) {
   const rows = await getSheetData(accessToken, config.spreadsheet_id, config.sheet_name);
@@ -523,6 +926,93 @@ async function importVehicles(supabase: any, accessToken: string, config: SheetC
   return { imported, skipped, errors };
 }
 
+// Append a single transaction to Google Sheets (for auto-sync when new transaction is created)
+async function appendTransaction(supabase: any, accessToken: string, config: SheetConfig & { transaction_id?: string }) {
+  // Get the transaction by ID
+  if (!config.transaction_id) {
+    return { success: false, error: 'transaction_id is required' };
+  }
+
+  const { data: transaction, error } = await supabase
+    .from('historical_invoice_data')
+    .select('*')
+    .eq('id', config.transaction_id)
+    .single();
+
+  if (error) {
+    return { success: false, error: `Failed to fetch transaction: ${error.message}` };
+  }
+
+  if (!transaction) {
+    return { success: false, error: 'Transaction not found' };
+  }
+
+  // Month names for conversion
+  const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+  // Create row data matching the Google Sheet format (same as exportTransactions)
+  const t = transaction;
+  const rowData = [
+    t.transaction_type || '',
+    t.transaction_date || '',
+    t.customer_name || '',
+    t.week_num || t.week_number || '',
+    t.period_month || '',
+    t.month_name || monthNames[t.period_month] || '',
+    t.period_year || '',
+    t.vendor_name || '',
+    t.pick_off || t.pickup_location || '',
+    t.drop_point || t.delivery_location || '',
+    t.route_cluster || '',
+    t.km_covered || '',
+    t.tonnage_loaded || '',
+    t.driver_name || '',
+    t.tonnage || '',
+    t.truck_number || '',
+    t.waybill_number || '',
+    t.num_deliveries || t.trips_count || '',
+    t.amount_vatable || '',
+    t.amount_not_vatable || '',
+    t.total_amount || t.total_revenue || '',
+    t.extra_dropoffs || '',
+    t.extra_dropoff_cost || '',
+    t.total_vendor_cost || t.vendor_cost || t.total_cost || '',
+    t.sub_total || '',
+    t.vat_amount || '',
+    t.total_revenue || '',
+    t.gross_profit || '',
+    t.wht_status || '',
+    t.vendor_bill_number || '',
+    t.vendor_invoice_status || '',
+    t.customer_payment_status || '',
+    t.invoice_status || '',
+    t.payment_receipt_date || '',
+    t.wht_deducted || '',
+    t.bank_payment_received || '',
+    t.bank_debited || '',
+    t.invoice_amount_paid || '',
+    t.balance_owed || '',
+    t.invoice_date || '',
+    t.invoice_number || '',
+    t.payment_terms_days || '',
+    t.due_date || '',
+    t.invoice_paid_date || '',
+    t.gap_in_payment || '',
+    t.invoice_ageing || '',
+    t.vendor_invoice_submission_date || '',
+    t.invoice_age_for_interest || '',
+    t.daily_rate || '',
+    t.interest_paid || '',
+    t.interest_not_paid || '',
+  ];
+
+  // Append the row to the sheet
+  await appendToSheet(accessToken, config.spreadsheet_id, config.sheet_name, [rowData]);
+
+  return { success: true, appended: 1, transaction_id: config.transaction_id };
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -585,6 +1075,14 @@ serve(async (req) => {
         result = { ...result, ...(await exportExpenses(supabase, accessToken, config)) };
         break;
 
+      case 'export_transactions':
+        result = { ...result, ...(await exportTransactions(supabase, accessToken, config)) };
+        break;
+
+      case 'import_transactions':
+        result = { ...result, ...(await importTransactions(supabase, accessToken, config)) };
+        break;
+
       case 'import_customers':
         result = { ...result, ...(await importCustomers(supabase, accessToken, config)) };
         break;
@@ -597,10 +1095,30 @@ serve(async (req) => {
         result = { ...result, ...(await importVehicles(supabase, accessToken, config)) };
         break;
 
+      case 'append_transaction':
+        // Append a single new transaction to the Google Sheet
+        result = { ...result, ...(await appendTransaction(supabase, accessToken, config)) };
+        break;
+
       case 'test_connection':
-        // Just test that we can access the spreadsheet
-        await getSheetData(accessToken, config.spreadsheet_id, config.sheet_name || 'Sheet1');
+        // Test connection by fetching spreadsheet metadata (doesn't require specific sheet)
+        const metaResponse = await fetch(
+          `${GOOGLE_SHEETS_API}/${config.spreadsheet_id}?fields=properties.title,sheets.properties.title`,
+          {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+          }
+        );
+
+        if (!metaResponse.ok) {
+          const errorText = await metaResponse.text();
+          throw new Error(`Failed to access spreadsheet: ${errorText}`);
+        }
+
+        const metaData = await metaResponse.json();
+        const sheetNames = metaData.sheets?.map((s: any) => s.properties?.title) || [];
         result.message = 'Connection successful';
+        result.spreadsheet_title = metaData.properties?.title;
+        result.available_sheets = sheetNames;
         break;
 
       default:

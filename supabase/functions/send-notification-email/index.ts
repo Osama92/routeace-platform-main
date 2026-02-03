@@ -63,9 +63,27 @@ serve(async (req) => {
       });
     }
 
-    const payload: SendNotificationEmailRequest = await req.json();
+    // Parse request body with error handling
+    let payload: SendNotificationEmailRequest;
+    try {
+      const bodyText = await req.text();
+      if (!bodyText || bodyText.trim() === "") {
+        return new Response(JSON.stringify({ success: false, error: "Request body is empty" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      payload = JSON.parse(bodyText);
+    } catch (parseError: any) {
+      console.error("JSON parse error:", parseError);
+      return new Response(JSON.stringify({ success: false, error: "Invalid JSON in request body" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (!payload.recipient_email || !payload.subject || !payload.body) {
-      return new Response(JSON.stringify({ success: false, error: "Missing required fields" }), {
+      return new Response(JSON.stringify({ success: false, error: "Missing required fields: recipient_email, subject, and body are required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -101,7 +119,7 @@ serve(async (req) => {
 
     try {
       const emailResponse = await resend.emails.send({
-        from: "RouteAce <onboarding@resend.dev>",
+        from: "Glyde Services <onboarding@resend.dev>",
         to: [payload.recipient_email],
         subject: finalSubject,
         html: payload.body.replace(/\n/g, "<br/>"),

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { z } from "zod";
-import { Truck, Mail, Lock, User, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { Truck, Mail, Lock, User, Eye, EyeOff, ArrowRight, CheckCircle2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,7 +29,9 @@ const Auth = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  
+  const [showEmailConfirmation, setShowEmailConfirmation] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState("");
+
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
@@ -127,9 +129,12 @@ const Auth = () => {
             });
           }
         } else {
+          // Show email confirmation banner (visible on mobile)
+          setRegisteredEmail(formData.email);
+          setShowEmailConfirmation(true);
           toast({
             title: "Account Created!",
-            description: "Your account has been created. You can now access the platform.",
+            description: "Please check your email to verify your account.",
           });
         }
       }
@@ -219,6 +224,37 @@ const Auth = () => {
             </div>
             <h1 className="font-heading font-bold text-xl text-foreground">LogiFlow</h1>
           </div>
+
+          {/* Email Confirmation Banner - Highly visible for mobile */}
+          {showEmailConfirmation && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 p-4 bg-success/10 border border-success/30 rounded-xl relative"
+            >
+              <button
+                onClick={() => setShowEmailConfirmation(false)}
+                className="absolute top-2 right-2 p-1 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-full bg-success/20 flex items-center justify-center flex-shrink-0">
+                  <CheckCircle2 className="w-5 h-5 text-success" />
+                </div>
+                <div className="flex-1 pr-4">
+                  <h3 className="font-semibold text-foreground mb-1">Check Your Email</h3>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    We've sent a verification link to:
+                  </p>
+                  <p className="text-sm font-medium text-primary break-all">{registeredEmail}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Click the link in your email to verify your account and start using the platform.
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          )}
 
           <div className="mb-8">
             <h2 className="font-heading text-2xl font-bold text-foreground mb-2">

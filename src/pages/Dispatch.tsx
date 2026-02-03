@@ -34,6 +34,7 @@ import {
   RefreshCw,
   Fuel,
   Pencil,
+  DollarSign,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -43,6 +44,7 @@ import { useAuditLog } from "@/hooks/useAuditLog";
 import MultipleDropoffs from "@/components/dispatch/MultipleDropoffs";
 import DispatchMapView from "@/components/dispatch/DispatchMapView";
 import { AddressAutocomplete } from "@/components/shared/AddressAutocomplete";
+import FinancialDetailsForm from "@/components/transactions/FinancialDetailsForm";
 
 interface Dropoff {
   id: string;
@@ -144,6 +146,7 @@ const DispatchPage = () => {
   const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isFinancialFormOpen, setIsFinancialFormOpen] = useState(false);
   const [selectedDispatch, setSelectedDispatch] = useState<Dispatch | null>(null);
   const [detailDropoffs, setDetailDropoffs] = useState<Dropoff[]>([]);
   const [dieselRates, setDieselRates] = useState<DieselRate[]>([]);
@@ -1211,6 +1214,21 @@ const DispatchPage = () => {
                     Update Status
                   </Button>
                 )}
+                {/* Add Financial Details button for delivered dispatches - Admin only */}
+                {hasAnyRole(["admin"]) && dispatch.status === "delivered" && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="flex-1 min-w-[140px]"
+                    onClick={() => {
+                      setSelectedDispatch(dispatch);
+                      setIsFinancialFormOpen(true);
+                    }}
+                  >
+                    <DollarSign className="w-4 h-4 mr-1" />
+                    Add Financials
+                  </Button>
+                )}
               </div>
             </motion.div>
           ))}
@@ -1548,6 +1566,30 @@ const DispatchPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Financial Details Form for completed dispatches */}
+      <FinancialDetailsForm
+        open={isFinancialFormOpen}
+        onOpenChange={setIsFinancialFormOpen}
+        dispatch={selectedDispatch ? {
+          id: selectedDispatch.id,
+          dispatch_number: selectedDispatch.dispatch_number,
+          pickup_address: selectedDispatch.pickup_address,
+          delivery_address: selectedDispatch.delivery_address,
+          distance_km: selectedDispatch.distance_km,
+          cargo_weight_kg: selectedDispatch.cargo_weight_kg,
+          customers: selectedDispatch.customers ? { id: "", company_name: selectedDispatch.customers.company_name } : null,
+          drivers: selectedDispatch.drivers ? { id: "", full_name: selectedDispatch.drivers.full_name } : null,
+          vehicles: selectedDispatch.vehicles ? { id: "", registration_number: selectedDispatch.vehicles.registration_number } : null,
+        } : null}
+        onSuccess={() => {
+          toast({
+            title: "Success",
+            description: "Financial details saved and will sync to Google Sheets",
+          });
+          fetchDispatches();
+        }}
+      />
     </DashboardLayout>
   );
 };

@@ -63,6 +63,7 @@ const GoogleSheetsIntegration = () => {
     vehicles: { type: "vehicles", status: "idle" },
     invoices: { type: "invoices", status: "idle" },
     expenses: { type: "expenses", status: "idle" },
+    transactions: { type: "transactions", status: "idle" },
   });
   const [selectedExportType, setSelectedExportType] = useState<SyncDataType>("dispatches");
   const [selectedImportType, setSelectedImportType] = useState<SyncDataType>("customers");
@@ -273,7 +274,10 @@ const GoogleSheetsIntegration = () => {
 
     try {
       let result;
-      const sheetName = dataType.charAt(0).toUpperCase() + dataType.slice(1);
+      // Use the correct sheet name - "All Month breakdown All Biz" for transactions
+      const sheetName = dataType === "transactions"
+        ? "All Month breakdown All Biz"
+        : dataType.charAt(0).toUpperCase() + dataType.slice(1);
 
       switch (dataType) {
         case "dispatches":
@@ -293,6 +297,9 @@ const GoogleSheetsIntegration = () => {
           break;
         case "expenses":
           result = await googleSheetsService.exportExpenses(spreadsheetId, sheetName);
+          break;
+        case "transactions":
+          result = await googleSheetsService.exportTransactions(spreadsheetId);
           break;
       }
 
@@ -356,7 +363,10 @@ const GoogleSheetsIntegration = () => {
 
     try {
       let result;
-      const sheetName = dataType.charAt(0).toUpperCase() + dataType.slice(1);
+      // Use the correct sheet name - "All Month breakdown All Biz" for transactions
+      const sheetName = dataType === "transactions"
+        ? "All Month breakdown All Biz"
+        : dataType.charAt(0).toUpperCase() + dataType.slice(1);
 
       switch (dataType) {
         case "customers":
@@ -368,24 +378,42 @@ const GoogleSheetsIntegration = () => {
         case "vehicles":
           result = await googleSheetsService.importVehicles(spreadsheetId, sheetName);
           break;
+        case "transactions":
+          result = await googleSheetsService.importTransactions(spreadsheetId);
+          break;
         default:
           throw new Error(`Import not supported for ${dataType}`);
       }
 
       if (result?.success) {
+        const debugInfo = result.debug;
+        const importedCount = result.imported || 0;
+        const skippedCount = result.skipped || 0;
+
         setSyncStatuses(prev => ({
           ...prev,
           [dataType]: {
             ...prev[dataType],
-            status: "success",
-            count: result.imported,
-            message: `Imported ${result.imported}, skipped ${result.skipped || 0}`,
+            status: importedCount > 0 ? "success" : "error",
+            count: importedCount,
+            message: `Imported ${importedCount}, skipped ${skippedCount}`,
           },
         }));
-        toast({
-          title: "Import Successful",
-          description: `Imported ${result.imported} ${dataType} from Google Sheets`,
-        });
+
+        // Show detailed toast with debug info if nothing was imported
+        if (importedCount === 0 && debugInfo) {
+          console.log('Import debug info:', debugInfo);
+          toast({
+            title: "Import Issue",
+            description: `0 records imported. Sheet: "${debugInfo.sheetName}", Rows found: ${debugInfo.totalRows || 0}. Headers: ${debugInfo.headersFound?.slice(0, 5).join(', ') || 'none'}. Check console for details.`,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Import Successful",
+            description: `Imported ${importedCount} ${dataType} from Google Sheets`,
+          });
+        }
       } else {
         throw new Error(result?.error || "Import failed");
       }
@@ -573,6 +601,7 @@ const GoogleSheetsIntegration = () => {
                 <SelectItem value="vehicles">Vehicles</SelectItem>
                 <SelectItem value="invoices">Invoices</SelectItem>
                 <SelectItem value="expenses">Expenses</SelectItem>
+                <SelectItem value="transactions">Transactions (Full 50+ Fields)</SelectItem>
               </SelectContent>
             </Select>
             <Button
@@ -620,6 +649,7 @@ const GoogleSheetsIntegration = () => {
                 <SelectItem value="customers">Customers</SelectItem>
                 <SelectItem value="drivers">Drivers</SelectItem>
                 <SelectItem value="vehicles">Vehicles</SelectItem>
+                <SelectItem value="transactions">Transactions (Full 50+ Fields)</SelectItem>
               </SelectContent>
             </Select>
             <Button

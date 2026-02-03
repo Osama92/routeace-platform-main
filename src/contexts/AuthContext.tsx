@@ -63,7 +63,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const fetchApprovalStatus = async (userId: string) => {
+  const fetchApprovalStatus = async (userId: string, userRole: AppRole | null) => {
     try {
       const { data, error } = await supabase
         .from("profiles")
@@ -73,10 +73,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       if (error) {
         console.log("No profile found for user");
+        // If user has a role but no profile, consider them approved
+        if (userRole) {
+          return { status: "approved" as ApprovalStatus, reason: null };
+        }
         return { status: null, reason: null };
       }
+
+      // If user has a valid role and is not explicitly suspended/rejected, consider them approved
+      // This handles cases where profile exists but approval_status is pending/null
+      const profileStatus = data?.approval_status as ApprovalStatus;
+      if (userRole && profileStatus !== "suspended" && profileStatus !== "rejected") {
+        return { status: "approved" as ApprovalStatus, reason: null };
+      }
+
       return {
-        status: data?.approval_status as ApprovalStatus,
+        status: profileStatus,
         reason: data?.suspension_reason,
       };
     } catch (error) {
@@ -87,7 +99,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const refreshApprovalStatus = async () => {
     if (user) {
-      const { status, reason } = await fetchApprovalStatus(user.id);
+      const { status, reason } = await fetchApprovalStatus(user.id, userRole);
       setApprovalStatus(status);
       setSuspensionReason(reason);
     }
@@ -167,7 +179,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             }
             const role = await fetchUserRole(session.user.id);
             setUserRole(role);
-            const { status, reason } = await fetchApprovalStatus(session.user.id);
+            const { status, reason } = await fetchApprovalStatus(session.user.id, role);
             setApprovalStatus(status);
             setSuspensionReason(reason);
           }, 0);
@@ -186,7 +198,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           setTimeout(async () => {
             const role = await fetchUserRole(session.user.id);
             setUserRole(role);
-            const { status, reason } = await fetchApprovalStatus(session.user.id);
+            const { status, reason } = await fetchApprovalStatus(session.user.id, role);
             setApprovalStatus(status);
             setSuspensionReason(reason);
           }, 0);
@@ -209,7 +221,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
         const role = await fetchUserRole(session.user.id);
         setUserRole(role);
-        const { status, reason } = await fetchApprovalStatus(session.user.id);
+        const { status, reason } = await fetchApprovalStatus(session.user.id, role);
         setApprovalStatus(status);
         setSuspensionReason(reason);
       }

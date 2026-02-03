@@ -1,6 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 
-export type SyncDataType = 'dispatches' | 'customers' | 'drivers' | 'vehicles' | 'invoices' | 'expenses';
+export type SyncDataType = 'dispatches' | 'customers' | 'drivers' | 'vehicles' | 'invoices' | 'expenses' | 'transactions';
 
 export interface SheetConfig {
   spreadsheet_id: string;
@@ -109,6 +109,49 @@ class GoogleSheetsService {
       sheet_name: sheetName,
       data_type: 'vehicles',
     });
+  }
+
+  // Export transactions (historical invoice data with all 50+ fields)
+  async exportTransactions(spreadsheetId: string, sheetName: string = 'All Month breakdown All Biz'): Promise<SyncResult> {
+    return this.callEdgeFunction('export_transactions', {
+      spreadsheet_id: spreadsheetId,
+      sheet_name: sheetName,
+      data_type: 'transactions',
+    });
+  }
+
+  // Import transactions from Google Sheets (historical invoice data with all 50+ fields)
+  async importTransactions(spreadsheetId: string, sheetName: string = 'All Month breakdown All Biz'): Promise<SyncResult> {
+    return this.callEdgeFunction('import_transactions', {
+      spreadsheet_id: spreadsheetId,
+      sheet_name: sheetName,
+      data_type: 'transactions',
+    });
+  }
+
+  // Append a single transaction to Google Sheets (auto-sync when new transaction created)
+  async appendTransaction(
+    spreadsheetId: string,
+    transactionId: string,
+    sheetName: string = 'All Month breakdown All Biz'
+  ): Promise<SyncResult> {
+    const { data, error } = await supabase.functions.invoke('google-sheets-sync', {
+      body: {
+        action: 'append_transaction',
+        config: {
+          spreadsheet_id: spreadsheetId,
+          sheet_name: sheetName,
+          data_type: 'transactions',
+          transaction_id: transactionId,
+        }
+      },
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Failed to append transaction to Google Sheets');
+    }
+
+    return data as SyncResult;
   }
 
   // Sync all data types (export)

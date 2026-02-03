@@ -29,10 +29,12 @@ export interface HistoricalInvoiceRow {
   vendor_name?: string;
   period_year: number;
   period_month: number;
+  month_name?: string;
   tonnage?: string;
   truck_type?: string;
   route?: string;
   pickup_location?: string;
+  pick_off?: string;
   delivery_location?: string;
   trips_count?: number;
   total_revenue?: number;
@@ -61,6 +63,7 @@ export interface HistoricalInvoiceRow {
   invoice_number?: string;
   gross_profit?: number;
   wht_status?: string;
+  wht_deducted?: number;
   vendor_bill_number?: string;
   vendor_invoice_status?: string;
   customer_payment_status?: string;
@@ -70,6 +73,20 @@ export interface HistoricalInvoiceRow {
   payment_terms_days?: number;
   due_date?: string;
   invoice_paid_date?: string;
+  // Additional financial fields
+  bank_payment_received?: string;
+  bank_payment_received_date?: string;
+  bank_debited?: string;
+  bank_debited_date?: string;
+  invoice_amount_paid?: number;
+  balance_owed?: number;
+  gap_in_payment?: number;
+  invoice_ageing?: number;
+  vendor_invoice_submission_date?: string;
+  invoice_age_for_interest?: number;
+  daily_rate?: number;
+  interest_paid?: number;
+  interest_not_paid?: number;
 }
 
 export const parseExcelFile = async <T>(
@@ -171,20 +188,21 @@ export const historicalInvoiceHeaderMap: Record<string, keyof HistoricalInvoiceR
   'vendor': 'vendor_name',
   'vendor name': 'vendor_name',
   '3pl vendor': 'vendor_name',
-  
+
   // Period
   'year': 'period_year',
   'period year': 'period_year',
   'month': 'period_month',
   'period month': 'period_month',
+  'month name': 'month_name',
   'week num': 'week_num',
   'week': 'week_num',
-  
+
   // Transaction details
   'transaction type': 'transaction_type',
   'date': 'transaction_date',
   'transaction date': 'transaction_date',
-  
+
   // Route & Location
   'route': 'route',
   'drop point': 'drop_point',
@@ -192,10 +210,11 @@ export const historicalInvoiceHeaderMap: Record<string, keyof HistoricalInvoiceR
   'route cluster': 'route_cluster',
   'pickup': 'pickup_location',
   'pickup location': 'pickup_location',
+  'pick off': 'pick_off',
   'delivery': 'delivery_location',
   'delivery location': 'delivery_location',
   'km covered': 'km_covered',
-  
+
   // Vehicle & Driver
   'tonnage': 'tonnage',
   'tonnage loaded': 'tonnage_loaded',
@@ -204,7 +223,7 @@ export const historicalInvoiceHeaderMap: Record<string, keyof HistoricalInvoiceR
   'truck number': 'truck_number',
   'driver name': 'driver_name',
   'driver': 'driver_name',
-  
+
   // Delivery details
   'waybill no': 'waybill_numbers',
   'waybill': 'waybill_numbers',
@@ -216,7 +235,7 @@ export const historicalInvoiceHeaderMap: Record<string, keyof HistoricalInvoiceR
   'extra drop off': 'extra_dropoffs',
   'extra dropoff': 'extra_dropoffs',
   'cost per extra dropoff': 'extra_dropoff_cost',
-  
+
   // Revenue & Cost
   'amount (vatable)': 'amount_vatable',
   'amount vatable': 'amount_vatable',
@@ -236,22 +255,23 @@ export const historicalInvoiceHeaderMap: Record<string, keyof HistoricalInvoiceR
   'subtotal': 'sub_total',
   'total vat on invoice': 'vat_amount',
   'vat': 'vat_amount',
-  
+
   // Profit
   'gross profit': 'gross_profit',
   'profit': 'profit_margin',
   'profit margin': 'profit_margin',
-  
+
   // Invoice details
   'customer invoice number': 'invoice_number',
   'invoice number': 'invoice_number',
   'invoice no': 'invoice_number',
   'invoice date': 'invoice_date',
   'invoice status': 'invoice_status',
-  
+
   // Payment status
   'wht payment status': 'wht_status',
   'wht status': 'wht_status',
+  'wht deducted': 'wht_deducted',
   'vendor bill number': 'vendor_bill_number',
   'vendor invoice status': 'vendor_invoice_status',
   'customer payment status': 'customer_payment_status',
@@ -261,7 +281,25 @@ export const historicalInvoiceHeaderMap: Record<string, keyof HistoricalInvoiceR
   'payment terms': 'payment_terms_days',
   'due date': 'due_date',
   'invoice paid date': 'invoice_paid_date',
-  
+
+  // Bank & Payment tracking
+  'bank payment was recieved': 'bank_payment_received',
+  'bank payment was received': 'bank_payment_received',
+  'bank debited': 'bank_debited',
+  'invoice amount paid': 'invoice_amount_paid',
+  'cutomer invoice - balance owed': 'balance_owed',
+  'customer invoice - balance owed': 'balance_owed',
+  'gap in payment': 'gap_in_payment',
+  'invoice ageing': 'invoice_ageing',
+  'vendor invoice submission date': 'vendor_invoice_submission_date',
+
+  // Interest calculation fields
+  'invoice age(for intrest calculation)': 'invoice_age_for_interest',
+  'invoice age(for interest calculation)': 'invoice_age_for_interest',
+  'daily rate': 'daily_rate',
+  'total interest on cash - paid': 'interest_paid',
+  'total interest on cash - notpaid': 'interest_not_paid',
+
   // Notes
   'notes': 'notes',
 };
@@ -333,90 +371,126 @@ export const generateDieselRateTemplate = (): void => {
 };
 
 export const generateHistoricalDataTemplate = (): void => {
+  // Complete 50+ field template matching Google Sheets format
+  // Order matches: "All Month breakdown All Biz" sheet
   const headers = [
     'Transaction Type',
     'Date',
     'Customer Name',
     'Week Num',
     'Month',
+    'Month Name',
     'Year',
     '3PL Vendor',
-    'Drop Point',
+    'Pick off',
+    'Drop point',
     'Route Cluster',
     'KM Covered',
     'Tonnage Loaded',
-    'Driver Name',
+    'Driver name',
     'Tonnage',
-    'Truck Number',
+    'Truck number',
     'Waybill No',
-    'No of Deliveries',
-    'Amount (Vatable)',
+    'No of Customers /Deliveries',
+    'AMOUNT (VATABLE)',
     'Amount (Not Vatable)',
-    'Extra Drop Off',
-    'Cost per Extra Dropoff',
+    'Amount',
+    'Extra drop off',
+    'Cost per Extra dropoff',
     'Total Vendor Cost (+ VAT)',
     'Sub-Total',
-    'Total VAT on Invoice',
-    'Customer Invoice Number',
-    'Total Rev VAT Incl',
+    'Total Vat on Invoice',
+    'Total Rev Vat Incl',
     'Gross Profit',
-    'WHT Payment Status',
-    'Vendor Bill Number',
+    'WHT Payment status',
+    'Vendor Bill number',
     'Vendor Invoice Status',
-    'Customer Payment Status',
+    'Customer Payment status',
     'Invoice Status',
-    'Payment Receipt Date',
-    'Invoice Date',
+    'Payment Reciept date',
+    'WHT deducted',
+    'Bank Payment was recieved',
+    'Bank Debited',
+    'Invoice Amount Paid',
+    'Cutomer Invoice - Balance Owed',
+    'Invoice date',
+    'Customer Invoice Number',
     'Payment Terms(Days)',
-    'Due Date',
+    'Due date',
     'Invoice Paid Date',
+    'Gap In Payment',
+    'Invoice Ageing',
+    'Vendor invoice submission date',
+    'Invoice Age(For Intrest Calculation)',
+    'Daily Rate',
+    'Total Interest on Cash - Paid',
+    'Total Interest on Cash - NotPaid',
     'Notes'
   ];
-  
+
   const sampleData = [
     [
-      'Invoice',
-      '2024-08-01',
-      'Dangote Cement',
-      32,
-      8,
-      2024,
-      'ABC Logistics',
-      'Lagos - Abuja',
-      'North-Central',
-      750,
-      30,
-      'John Driver',
-      '30T',
-      'ABC-123-XY',
-      'WB-001,WB-002',
-      2,
-      350000,
-      0,
-      1,
-      15000,
-      280000,
-      365000,
-      27375,
-      'INV-2024-001',
-      392375,
-      112375,
-      'Pending',
-      'VB-001',
-      'Paid',
-      'Paid',
-      'Closed',
-      '2024-09-15',
-      '2024-08-05',
-      30,
-      '2024-09-05',
-      '2024-09-15',
-      'Sample historical record'
+      'Invoice',           // Transaction Type
+      '2024-08-01',        // Date
+      'Dangote Cement',    // Customer Name
+      32,                  // Week Num
+      8,                   // Month
+      'August',            // Month Name
+      2024,                // Year
+      'ABC Logistics',     // 3PL Vendor
+      'Lagos Depot',       // Pick off
+      'Abuja Terminal',    // Drop point
+      'North-Central',     // Route Cluster
+      750,                 // KM Covered
+      30,                  // Tonnage Loaded
+      'John Driver',       // Driver name
+      '30T',               // Tonnage
+      'ABC-123-XY',        // Truck number
+      'WB-001,WB-002',     // Waybill No
+      2,                   // No of Customers /Deliveries
+      350000,              // AMOUNT (VATABLE)
+      0,                   // Amount (Not Vatable)
+      350000,              // Amount
+      1,                   // Extra drop off
+      15000,               // Cost per Extra dropoff
+      280000,              // Total Vendor Cost (+ VAT)
+      322625,              // Sub-Total
+      27375,               // Total Vat on Invoice
+      392375,              // Total Rev Vat Incl
+      112375,              // Gross Profit
+      'Pending',           // WHT Payment status
+      'VB-001',            // Vendor Bill number
+      'Paid',              // Vendor Invoice Status
+      'Paid',              // Customer Payment status
+      'Closed',            // Invoice Status
+      '2024-09-15',        // Payment Reciept date
+      17500,               // WHT deducted
+      'Yes',               // Bank Payment was recieved
+      'GTBank',            // Bank Debited
+      392375,              // Invoice Amount Paid
+      0,                   // Cutomer Invoice - Balance Owed
+      '2024-08-05',        // Invoice date
+      'INV-2024-001',      // Customer Invoice Number (after Invoice date)
+      30,                  // Payment Terms(Days)
+      '2024-09-05',        // Due date
+      '2024-09-15',        // Invoice Paid Date
+      10,                  // Gap In Payment (days late)
+      0,                   // Invoice Ageing (0 if paid)
+      '2024-08-10',        // Vendor invoice submission date
+      45,                  // Invoice Age(For Intrest Calculation)
+      0.0001,              // Daily Rate (0.01%)
+      0,                   // Total Interest on Cash - Paid
+      0,                   // Total Interest on Cash - NotPaid
+      'Sample record'      // Notes
     ],
   ];
-  
+
   const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleData]);
+
+  // Set column widths
+  ws['!cols'] = headers.map((_, i) => ({ wch: i < 5 ? 15 : 20 }));
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Historical Data');
-  XLSX.writeFile(wb, 'historical-data-template.xlsx');
+  XLSX.writeFile(wb, 'historical-data-template-complete.xlsx');
 };
