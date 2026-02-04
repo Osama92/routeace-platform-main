@@ -43,6 +43,7 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import GoogleSheetsIntegration from "@/components/settings/GoogleSheetsIntegration";
+import ApprovalSettings from "@/components/settings/ApprovalSettings";
 
 interface Integration {
   id: string;
@@ -364,6 +365,10 @@ const SettingsPage = () => {
           <TabsTrigger value="notifications">
             <Bell className="w-4 h-4 mr-2" />
             Notifications
+          </TabsTrigger>
+          <TabsTrigger value="approvals">
+            <Shield className="w-4 h-4 mr-2" />
+            Approvals
           </TabsTrigger>
           <TabsTrigger value="general">
             <SettingsIcon className="w-4 h-4 mr-2" />
@@ -713,6 +718,15 @@ const SettingsPage = () => {
                 </Button>
               </CardContent>
             </Card>
+          </motion.div>
+        </TabsContent>
+
+        <TabsContent value="approvals" className="space-y-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <ApprovalSettings />
           </motion.div>
         </TabsContent>
 

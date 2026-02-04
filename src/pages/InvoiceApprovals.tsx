@@ -74,7 +74,21 @@ interface Invoice {
   };
   submitter?: {
     full_name: string;
+    email: string;
   };
+  first_approver?: {
+    full_name: string;
+    email: string;
+  };
+  second_approver?: {
+    full_name: string;
+    email: string;
+  };
+}
+
+interface ApprovalRole {
+  user_id: string;
+  approval_level: "first_level" | "second_level";
 }
 
 const formatCurrency = (amount: number) => {
@@ -118,12 +132,18 @@ const InvoiceApprovalsPage = () => {
   const [rejectionReason, setRejectionReason] = useState("");
   const [processing, setProcessing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("pending");
+  const [userApprovalRoles, setUserApprovalRoles] = useState<ApprovalRole[]>([]);
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
   const { logChange } = useAuditLog();
+
+  // Check if current user can perform approvals at each level
+  const canFirstApprove = userApprovalRoles.some(r => r.approval_level === "first_level") || hasRole("admin");
+  const canSecondApprove = userApprovalRoles.some(r => r.approval_level === "second_level") || hasRole("admin");
 
   const fetchInvoices = async () => {
     try {
+      // Fetch invoices with customer and approver info
       const { data, error } = await supabase
         .from("invoices")
         .select(`
@@ -134,7 +154,47 @@ const InvoiceApprovalsPage = () => {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setInvoices(data || []);
+
+      // Fetch approver profiles separately for each invoice that has approvers
+      const invoicesWithApprovers = await Promise.all(
+        (data || []).map(async (invoice) => {
+          const result: Invoice = { ...invoice };
+
+          // Fetch submitter info
+          if (invoice.submitted_by) {
+            const { data: submitter } = await supabase
+              .from("profiles")
+              .select("full_name, email")
+              .eq("user_id", invoice.submitted_by)
+              .single();
+            if (submitter) result.submitter = submitter;
+          }
+
+          // Fetch first approver info
+          if (invoice.first_approver_id) {
+            const { data: firstApprover } = await supabase
+              .from("profiles")
+              .select("full_name, email")
+              .eq("user_id", invoice.first_approver_id)
+              .single();
+            if (firstApprover) result.first_approver = firstApprover;
+          }
+
+          // Fetch second approver info
+          if (invoice.second_approver_id) {
+            const { data: secondApprover } = await supabase
+              .from("profiles")
+              .select("full_name, email")
+              .eq("user_id", invoice.second_approver_id)
+              .single();
+            if (secondApprover) result.second_approver = secondApprover;
+          }
+
+          return result;
+        })
+      );
+
+      setInvoices(invoicesWithApprovers);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -146,9 +206,26 @@ const InvoiceApprovalsPage = () => {
     }
   };
 
+  const fetchUserApprovalRoles = async () => {
+    if (!user?.id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("approval_roles")
+        .select("user_id, approval_level")
+        .eq("user_id", user.id);
+
+      if (error) throw error;
+      setUserApprovalRoles(data || []);
+    } catch (error) {
+      console.error("Failed to fetch approval roles:", error);
+    }
+  };
+
   useEffect(() => {
     fetchInvoices();
-  }, []);
+    fetchUserApprovalRoles();
+  }, [user?.id]);
 
   const sendApprovalNotification = async (invoiceId: string, action: "first_approval" | "second_approval" | "rejected", rejectionReason?: string) => {
     try {
@@ -506,12 +583,21 @@ const InvoiceApprovalsPage = () => {
                 </div>
               )}
 
+              {/* Submitter Info */}
+              {selectedInvoice.submitter && (
+                <div className="p-3 bg-muted/30 rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Submitted By</p>
+                  <p className="text-sm font-medium">{selectedInvoice.submitter.full_name}</p>
+                  <p className="text-xs text-muted-foreground">{selectedInvoice.submitter.email}</p>
+                </div>
+              )}
+
               {/* Approval Timeline */}
               <div className="space-y-3">
                 <p className="text-sm font-medium">Approval Timeline</p>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                <div className="space-y-3">
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/20">
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
                       selectedInvoice.first_approver_id ? "bg-success/20" : "bg-muted"
                     }`}>
                       {selectedInvoice.first_approver_id ? (
@@ -520,17 +606,23 @@ const InvoiceApprovalsPage = () => {
                         <Clock className="w-3 h-3 text-muted-foreground" />
                       )}
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="text-sm font-medium">First Approval</p>
-                      <p className="text-xs text-muted-foreground">
-                        {selectedInvoice.first_approved_at 
-                          ? format(new Date(selectedInvoice.first_approved_at), "dd MMM yyyy HH:mm")
-                          : "Pending"}
-                      </p>
+                      {selectedInvoice.first_approver ? (
+                        <>
+                          <p className="text-xs text-foreground">{selectedInvoice.first_approver.full_name}</p>
+                          <p className="text-xs text-muted-foreground">{selectedInvoice.first_approver.email}</p>
+                          <p className="text-xs text-success mt-1">
+                            {format(new Date(selectedInvoice.first_approved_at!), "dd MMM yyyy 'at' HH:mm")}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Pending</p>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/20">
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
                       selectedInvoice.second_approver_id ? "bg-success/20" : "bg-muted"
                     }`}>
                       {selectedInvoice.second_approver_id ? (
@@ -539,13 +631,19 @@ const InvoiceApprovalsPage = () => {
                         <Clock className="w-3 h-3 text-muted-foreground" />
                       )}
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">Second Approval</p>
-                      <p className="text-xs text-muted-foreground">
-                        {selectedInvoice.second_approved_at 
-                          ? format(new Date(selectedInvoice.second_approved_at), "dd MMM yyyy HH:mm")
-                          : "Pending"}
-                      </p>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">Second Approval (Final)</p>
+                      {selectedInvoice.second_approver ? (
+                        <>
+                          <p className="text-xs text-foreground">{selectedInvoice.second_approver.full_name}</p>
+                          <p className="text-xs text-muted-foreground">{selectedInvoice.second_approver.email}</p>
+                          <p className="text-xs text-success mt-1">
+                            {format(new Date(selectedInvoice.second_approved_at!), "dd MMM yyyy 'at' HH:mm")}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Pending</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -561,20 +659,25 @@ const InvoiceApprovalsPage = () => {
             </div>
           )}
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 flex-wrap">
             {selectedInvoice?.approval_status === "pending_first_approval" && (
               <>
+                {!canFirstApprove && (
+                  <p className="text-xs text-muted-foreground w-full text-center mb-2">
+                    You are not authorized to give first level approval
+                  </p>
+                )}
                 <Button
                   variant="destructive"
                   onClick={() => setIsRejectDialogOpen(true)}
-                  disabled={processing}
+                  disabled={processing || !canFirstApprove}
                 >
                   <XCircle className="w-4 h-4 mr-2" />
                   Reject
                 </Button>
                 <Button
                   onClick={() => handleFirstApproval(selectedInvoice)}
-                  disabled={processing}
+                  disabled={processing || !canFirstApprove}
                 >
                   <CheckCircle className="w-4 h-4 mr-2" />
                   {processing ? "Processing..." : "Approve (1st Level)"}
@@ -583,17 +686,22 @@ const InvoiceApprovalsPage = () => {
             )}
             {selectedInvoice?.approval_status === "pending_second_approval" && (
               <>
+                {!canSecondApprove && (
+                  <p className="text-xs text-muted-foreground w-full text-center mb-2">
+                    You are not authorized to give final approval
+                  </p>
+                )}
                 <Button
                   variant="destructive"
                   onClick={() => setIsRejectDialogOpen(true)}
-                  disabled={processing}
+                  disabled={processing || !canSecondApprove}
                 >
                   <XCircle className="w-4 h-4 mr-2" />
                   Reject
                 </Button>
                 <Button
                   onClick={() => handleSecondApproval(selectedInvoice)}
-                  disabled={processing}
+                  disabled={processing || !canSecondApprove}
                 >
                   <CheckCheck className="w-4 h-4 mr-2" />
                   {processing ? "Processing..." : "Final Approval"}

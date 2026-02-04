@@ -91,6 +91,10 @@ interface Invoice {
   zoho_invoice_id?: string | null;
   zoho_synced_at?: string | null;
   status_updated_at?: string | null;
+  first_approver_id?: string | null;
+  first_approved_at?: string | null;
+  second_approver_id?: string | null;
+  second_approved_at?: string | null;
   customers?: {
     company_name: string;
   };
@@ -99,6 +103,14 @@ interface Invoice {
     delivery_address: string;
     distance_km: number | null;
   } | null;
+  first_approver?: {
+    full_name: string;
+    email: string;
+  };
+  second_approver?: {
+    full_name: string;
+    email: string;
+  };
 }
 
 interface Customer {
@@ -347,19 +359,42 @@ const InvoicesPage = () => {
 
       if (error) throw error;
 
-      // Auto-detect overdue invoices (only for invoices not in approval workflow or already approved)
+      // Auto-detect overdue invoices and fetch approver info
       const now = new Date();
-      const processedInvoices = (data || []).map((inv: any) => {
-        // Only check overdue for invoices that are approved or have no approval workflow
-        const isApproved = inv.approval_status === "approved" || inv.approval_status === null;
-        if (inv.status === "pending" && inv.due_date && isApproved) {
-          const dueDate = new Date(inv.due_date);
-          if (dueDate < now) {
-            return { ...inv, status: "overdue" };
+      const processedInvoices = await Promise.all(
+        (data || []).map(async (inv: any) => {
+          // Only check overdue for invoices that are approved or have no approval workflow
+          const isApproved = inv.approval_status === "approved" || inv.approval_status === null;
+          if (inv.status === "pending" && inv.due_date && isApproved) {
+            const dueDate = new Date(inv.due_date);
+            if (dueDate < now) {
+              inv.status = "overdue";
+            }
           }
-        }
-        return inv;
-      });
+
+          // Fetch first approver info
+          if (inv.first_approver_id) {
+            const { data: firstApprover } = await supabase
+              .from("profiles")
+              .select("full_name, email")
+              .eq("user_id", inv.first_approver_id)
+              .single();
+            if (firstApprover) inv.first_approver = firstApprover;
+          }
+
+          // Fetch second approver info
+          if (inv.second_approver_id) {
+            const { data: secondApprover } = await supabase
+              .from("profiles")
+              .select("full_name, email")
+              .eq("user_id", inv.second_approver_id)
+              .single();
+            if (secondApprover) inv.second_approver = secondApprover;
+          }
+
+          return inv;
+        })
+      );
 
       setInvoices(processedInvoices);
     } catch (error: any) {
@@ -1723,6 +1758,30 @@ const InvoicesPage = () => {
                       <span className={`status-badge ${approvalStatusConfig[selectedInvoice.approval_status]?.className || 'bg-muted text-muted-foreground'}`}>
                         {approvalStatusConfig[selectedInvoice.approval_status]?.label || selectedInvoice.approval_status}
                       </span>
+                    </div>
+                  )}
+                  {selectedInvoice.first_approver && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">First Approval</p>
+                      <p className="font-medium text-foreground text-sm">{selectedInvoice.first_approver.full_name}</p>
+                      <p className="text-xs text-muted-foreground">{selectedInvoice.first_approver.email}</p>
+                      {selectedInvoice.first_approved_at && (
+                        <p className="text-xs text-success">
+                          {new Date(selectedInvoice.first_approved_at).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {selectedInvoice.second_approver && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Final Approval</p>
+                      <p className="font-medium text-foreground text-sm">{selectedInvoice.second_approver.full_name}</p>
+                      <p className="text-xs text-muted-foreground">{selectedInvoice.second_approver.email}</p>
+                      {selectedInvoice.second_approved_at && (
+                        <p className="text-xs text-success">
+                          {new Date(selectedInvoice.second_approved_at).toLocaleString()}
+                        </p>
+                      )}
                     </div>
                   )}
                   {selectedInvoice.paid_date && (
