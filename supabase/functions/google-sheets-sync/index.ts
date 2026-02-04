@@ -519,6 +519,117 @@ async function exportTransactions(supabase: any, accessToken: string, config: Sh
   return { exported: rows.length };
 }
 
+// Helper functions for entity lookup (used when creating historical dispatches)
+async function lookupCustomerByName(supabase: any, name: string): Promise<{ id: string } | null> {
+  if (!name) return null;
+  const { data } = await supabase
+    .from('customers')
+    .select('id')
+    .ilike('company_name', `%${name}%`)
+    .limit(1)
+    .single();
+  return data;
+}
+
+async function lookupDriverByName(supabase: any, name: string): Promise<{ id: string } | null> {
+  if (!name) return null;
+  const { data } = await supabase
+    .from('drivers')
+    .select('id')
+    .ilike('full_name', `%${name}%`)
+    .limit(1)
+    .single();
+  return data;
+}
+
+async function lookupVehicleByRegistration(supabase: any, regNumber: string): Promise<{ id: string } | null> {
+  if (!regNumber) return null;
+  const { data } = await supabase
+    .from('vehicles')
+    .select('id')
+    .ilike('registration_number', `%${regNumber}%`)
+    .limit(1)
+    .single();
+  return data;
+}
+
+async function lookupPartnerByName(supabase: any, name: string): Promise<{ id: string } | null> {
+  if (!name) return null;
+  const { data } = await supabase
+    .from('partners')
+    .select('id')
+    .ilike('company_name', `%${name}%`)
+    .limit(1)
+    .single();
+  return data;
+}
+
+// Create historical dispatch from transaction data
+async function createHistoricalDispatch(
+  supabase: any,
+  transactionId: string,
+  transactionData: any,
+  rowIndex: number
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Check if dispatch already exists for this transaction
+    const { data: existingDispatch } = await supabase
+      .from('dispatches')
+      .select('id')
+      .eq('historical_transaction_id', transactionId)
+      .single();
+
+    if (existingDispatch) {
+      // Dispatch already exists, skip
+      return { success: true };
+    }
+
+    // Lookup related entities by name
+    const customer = await lookupCustomerByName(supabase, transactionData.customer_name);
+    const driver = await lookupDriverByName(supabase, transactionData.driver_name);
+    const vehicle = await lookupVehicleByRegistration(supabase, transactionData.truck_number);
+
+    // Generate dispatch number
+    const dateStr = transactionData.transaction_date
+      ? transactionData.transaction_date.replace(/-/g, '')
+      : `${transactionData.period_year}${String(transactionData.period_month).padStart(2, '0')}`;
+    const dispatchNumber = `HST-${dateStr}-${String(rowIndex).padStart(4, '0')}`;
+
+    // Create the historical dispatch
+    const dispatchData = {
+      dispatch_number: dispatchNumber,
+      customer_id: customer?.id || null,
+      driver_id: driver?.id || null,
+      vehicle_id: vehicle?.id || null,
+      pickup_address: transactionData.pickup_location || transactionData.pick_off || 'N/A',
+      delivery_address: transactionData.delivery_location || transactionData.drop_point || 'N/A',
+      distance_km: transactionData.km_covered || null,
+      cargo_weight_kg: transactionData.tonnage_loaded || null,
+      cost: transactionData.total_amount || transactionData.total_revenue || null,
+      status: 'delivered',
+      actual_delivery: transactionData.transaction_date || null,
+      is_historical: true,
+      historical_transaction_id: transactionId,
+      import_source: 'google_sheets',
+      notes: `Imported from Google Sheets${transactionData.invoice_number ? ` - Invoice: ${transactionData.invoice_number}` : ''}${transactionData.waybill_number ? ` - Waybill: ${transactionData.waybill_number}` : ''}`,
+    };
+
+    const { error: dispatchError } = await supabase
+      .from('dispatches')
+      .insert(dispatchData);
+
+    if (dispatchError) {
+      console.error('Failed to create historical dispatch:', dispatchError);
+      return { success: false, error: dispatchError.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error creating historical dispatch:', err);
+    return { success: false, error: err.message };
+  }
+}
+
 // Import transactions from Google Sheets - Full 50+ field coverage
 async function importTransactions(supabase: any, accessToken: string, config: SheetConfig) {
   console.log('Starting importTransactions with sheet:', config.sheet_name);
@@ -617,6 +728,7 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
 
   let imported = 0;
   let skipped = 0;
+  let dispatchesCreated = 0;
   const errors: string[] = [];
   const skipReasons: string[] = [];
 
@@ -756,14 +868,33 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
         console.log('First row transaction data:', JSON.stringify(transactionData, null, 2));
       }
 
-      const { error } = await supabase
+      // Insert transaction and get the ID back
+      const { data: insertedData, error } = await supabase
         .from('historical_invoice_data')
-        .insert(transactionData);
+        .insert(transactionData)
+        .select('id')
+        .single();
 
       if (error) {
         console.error(`Row ${i + 2} insert error:`, error);
         throw error;
       }
+
+      // Create historical dispatch for this transaction
+      if (insertedData?.id) {
+        const dispatchResult = await createHistoricalDispatch(
+          supabase,
+          insertedData.id,
+          transactionData,
+          i + 1
+        );
+        if (dispatchResult.success) {
+          dispatchesCreated++;
+        } else {
+          console.warn(`Row ${i + 2}: Transaction imported but dispatch creation failed: ${dispatchResult.error}`);
+        }
+      }
+
       imported++;
     } catch (err: any) {
       const errorMsg = err.message || err.details || JSON.stringify(err);
@@ -798,9 +929,16 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
     .order('imported_at', { ascending: false })
     .limit(3);
 
+  // Count historical dispatches created
+  const { count: dispatchCount } = await supabase
+    .from('dispatches')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_historical', true);
+
   return {
     imported,
     skipped,
+    dispatchesCreated,
     errors: errors.slice(0, 10), // Limit errors to first 10
     debug: {
       totalRows: rows.length,
@@ -818,7 +956,8 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
       totalRecordsInTable: totalCount,
       countError: countError?.message || null,
       recentlyImported: recentRecords || [],
-      recentError: recentError?.message || null
+      recentError: recentError?.message || null,
+      totalHistoricalDispatches: dispatchCount || 0
     }
   };
 }

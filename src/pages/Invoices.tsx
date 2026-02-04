@@ -83,6 +83,7 @@ interface Invoice {
   tax_amount: number;
   total_amount: number;
   status: string;
+  approval_status: string | null;
   due_date: string | null;
   paid_date: string | null;
   notes: string | null;
@@ -152,6 +153,25 @@ const statusConfig: Record<string, { label: string; icon: typeof CheckCircle; cl
     label: "Draft",
     icon: FileText,
     className: "bg-muted text-muted-foreground",
+  },
+};
+
+const approvalStatusConfig: Record<string, { label: string; className: string }> = {
+  pending_first_approval: {
+    label: "Pending 1st Approval",
+    className: "bg-warning/15 text-warning",
+  },
+  pending_second_approval: {
+    label: "Pending 2nd Approval",
+    className: "bg-info/15 text-info",
+  },
+  approved: {
+    label: "Approved",
+    className: "bg-success/15 text-success",
+  },
+  rejected: {
+    label: "Rejected",
+    className: "bg-destructive/15 text-destructive",
   },
 };
 
@@ -326,11 +346,13 @@ const InvoicesPage = () => {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      
-      // Auto-detect overdue invoices
+
+      // Auto-detect overdue invoices (only for invoices not in approval workflow or already approved)
       const now = new Date();
       const processedInvoices = (data || []).map((inv: any) => {
-        if (inv.status === "pending" && inv.due_date) {
+        // Only check overdue for invoices that are approved or have no approval workflow
+        const isApproved = inv.approval_status === "approved" || inv.approval_status === null;
+        if (inv.status === "pending" && inv.due_date && isApproved) {
           const dueDate = new Date(inv.due_date);
           if (dueDate < now) {
             return { ...inv, status: "overdue" };
@@ -338,7 +360,7 @@ const InvoicesPage = () => {
         }
         return inv;
       });
-      
+
       setInvoices(processedInvoices);
     } catch (error: any) {
       toast({
@@ -1558,12 +1580,26 @@ const InvoicesPage = () => {
                       {formatCurrency(invoice.total_amount)}
                     </TableCell>
                     <TableCell>
-                      <span
-                        className={`status-badge ${status.className}`}
-                      >
-                        <StatusIcon className="w-3 h-3" />
-                        {status.label}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        {/* If in approval workflow (not null) and NOT approved yet - show approval status */}
+                        {invoice.approval_status &&
+                         invoice.approval_status !== 'approved' &&
+                         approvalStatusConfig[invoice.approval_status] ? (
+                          <span
+                            className={`status-badge ${approvalStatusConfig[invoice.approval_status].className}`}
+                          >
+                            {approvalStatusConfig[invoice.approval_status].label}
+                          </span>
+                        ) : (
+                          /* Show payment status for: approved invoices OR invoices without approval workflow */
+                          <span
+                            className={`status-badge ${status.className}`}
+                          >
+                            <StatusIcon className="w-3 h-3" />
+                            {status.label}
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : '—'}
@@ -1654,7 +1690,7 @@ const InvoicesPage = () => {
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Status</p>
+                    <p className="text-sm text-muted-foreground">Payment Status</p>
                     <div className="flex items-center gap-2">
                       <p className="font-medium text-foreground capitalize">
                         {selectedInvoice.status}
@@ -1681,6 +1717,14 @@ const InvoicesPage = () => {
                       )}
                     </div>
                   </div>
+                  {selectedInvoice.approval_status && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Approval Status</p>
+                      <span className={`status-badge ${approvalStatusConfig[selectedInvoice.approval_status]?.className || 'bg-muted text-muted-foreground'}`}>
+                        {approvalStatusConfig[selectedInvoice.approval_status]?.label || selectedInvoice.approval_status}
+                      </span>
+                    </div>
+                  )}
                   {selectedInvoice.paid_date && (
                     <div>
                       <p className="text-sm text-muted-foreground">Paid Date</p>

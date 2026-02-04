@@ -35,7 +35,13 @@ import {
   Fuel,
   Pencil,
   DollarSign,
+  History,
+  CalendarRange,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -83,6 +89,10 @@ interface Dispatch {
   vehicle_id: string | null;
   driver_id: string | null;
   created_at: string;
+  is_historical?: boolean | null;
+  historical_transaction_id?: string | null;
+  import_source?: string | null;
+  actual_delivery?: string | null;
   drivers?: { full_name: string } | null;
   vehicles?: {
     registration_number: string;
@@ -149,6 +159,11 @@ const DispatchPage = () => {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "regular" | "historical">("all");
+  const [dateRange, setDateRange] = useState<{ from: Date | null; to: Date | null }>({
+    from: null,
+    to: null,
+  });
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
@@ -333,7 +348,30 @@ const DispatchPage = () => {
       dispatch.pickup_address.toLowerCase().includes(searchQuery.toLowerCase()) ||
       dispatch.delivery_address.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === "all" || dispatch.status === statusFilter;
-    return matchesSearch && matchesStatus;
+
+    // Source filter (historical vs regular)
+    const matchesSource =
+      sourceFilter === "all" ||
+      (sourceFilter === "historical" && dispatch.is_historical === true) ||
+      (sourceFilter === "regular" && !dispatch.is_historical);
+
+    // Date range filter
+    let matchesDateRange = true;
+    if (dateRange.from || dateRange.to) {
+      const dispatchDate = new Date(dispatch.actual_delivery || dispatch.created_at);
+      if (dateRange.from && dispatchDate < dateRange.from) {
+        matchesDateRange = false;
+      }
+      if (dateRange.to) {
+        const endOfDay = new Date(dateRange.to);
+        endOfDay.setHours(23, 59, 59, 999);
+        if (dispatchDate > endOfDay) {
+          matchesDateRange = false;
+        }
+      }
+    }
+
+    return matchesSearch && matchesStatus && matchesSource && matchesDateRange;
   });
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -820,6 +858,61 @@ const DispatchPage = () => {
               <SelectItem value="cancelled">Cancelled</SelectItem>
             </SelectContent>
           </Select>
+
+          {/* Source Filter (Historical/Regular) */}
+          <Select value={sourceFilter} onValueChange={(v: "all" | "regular" | "historical") => setSourceFilter(v)}>
+            <SelectTrigger className="w-40 bg-secondary/50 border-border/50">
+              <History className="w-4 h-4 mr-2" />
+              <SelectValue placeholder="Source" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Dispatches</SelectItem>
+              <SelectItem value="regular">Regular Only</SelectItem>
+              <SelectItem value="historical">Historical Only</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Date Range Filter */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-auto bg-secondary/50 border-border/50">
+                <CalendarRange className="w-4 h-4 mr-2" />
+                {dateRange.from ? (
+                  dateRange.to ? (
+                    <>
+                      {format(dateRange.from, "MMM d")} - {format(dateRange.to, "MMM d")}
+                    </>
+                  ) : (
+                    format(dateRange.from, "MMM d, yyyy")
+                  )
+                ) : (
+                  "Date Range"
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <CalendarComponent
+                initialFocus
+                mode="range"
+                defaultMonth={dateRange.from || new Date()}
+                selected={{ from: dateRange.from || undefined, to: dateRange.to || undefined }}
+                onSelect={(range) => setDateRange({ from: range?.from || null, to: range?.to || null })}
+                numberOfMonths={2}
+              />
+              {(dateRange.from || dateRange.to) && (
+                <div className="p-2 border-t">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => setDateRange({ from: null, to: null })}
+                  >
+                    Clear Date Filter
+                  </Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
         </div>
 
         {canManage && (
@@ -1102,13 +1195,19 @@ const DispatchPage = () => {
               {/* Header */}
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-heading font-semibold text-foreground">
                       {dispatch.dispatch_number} | {dispatch.vehicles?.registration_number || "—"}
                     </span>
                     <span className={`status-badge ${priorityColors[dispatch.priority] || priorityColors.normal}`}>
                       {dispatch.priority}
                     </span>
+                    {dispatch.is_historical && (
+                      <Badge variant="secondary" className="text-xs">
+                        <History className="w-3 h-3 mr-1" />
+                        Historical
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {dispatch.pickup_address?.split(",")[0]} → {dispatch.delivery_address?.split(",")[0]}
@@ -1198,7 +1297,7 @@ const DispatchPage = () => {
                 >
                   View Details
                 </Button>
-                {canManage && dispatch.status !== "delivered" && dispatch.status !== "cancelled" && (
+                {canManage && dispatch.status !== "delivered" && dispatch.status !== "cancelled" && !dispatch.is_historical && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1207,7 +1306,7 @@ const DispatchPage = () => {
                     <Pencil className="w-4 h-4" />
                   </Button>
                 )}
-                {canUpdateStatus && dispatch.status !== "delivered" && dispatch.status !== "cancelled" && dispatch.approval_status === "approved" && (
+                {canUpdateStatus && dispatch.status !== "delivered" && dispatch.status !== "cancelled" && dispatch.approval_status === "approved" && !dispatch.is_historical && (
                   <Button
                     size="sm"
                     className="flex-1 min-w-[120px]"
@@ -1221,7 +1320,7 @@ const DispatchPage = () => {
                     Update Status
                   </Button>
                 )}
-                {/* Add Financial Details button for delivered dispatches - Admin only */}
+                {/* Add/View Financial Details button for delivered dispatches - Admin only */}
                 {hasAnyRole(["admin"]) && dispatch.status === "delivered" && (
                   <Button
                     size="sm"
@@ -1233,7 +1332,7 @@ const DispatchPage = () => {
                     }}
                   >
                     <DollarSign className="w-4 h-4 mr-1" />
-                    Add Financials
+                    {dispatch.is_historical ? "View Financials" : "Add Financials"}
                   </Button>
                 )}
               </div>
@@ -1589,6 +1688,7 @@ const DispatchPage = () => {
           drivers: selectedDispatch.drivers ? { id: "", full_name: selectedDispatch.drivers.full_name } : null,
           vehicles: selectedDispatch.vehicles ? { id: "", registration_number: selectedDispatch.vehicles.registration_number } : null,
         } : null}
+        isReadOnly={selectedDispatch?.is_historical === true}
         onSuccess={() => {
           toast({
             title: "Success",

@@ -67,6 +67,7 @@ interface FinancialDetailsFormProps {
   dispatch?: DispatchData | null;
   existingTransaction?: any | null;
   onSuccess?: () => void;
+  isReadOnly?: boolean;
 }
 
 interface FormValues {
@@ -154,6 +155,7 @@ const FinancialDetailsForm = ({
   dispatch,
   existingTransaction,
   onSuccess,
+  isReadOnly = false,
 }: FinancialDetailsFormProps) => {
   const [loading, setLoading] = useState(false);
   const [vendors, setVendors] = useState<{ id: string; company_name: string }[]>([]);
@@ -408,7 +410,11 @@ const FinancialDetailsForm = ({
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {existingTransaction ? "Edit Transaction" : "Add Financial Details"}
+            {isReadOnly
+              ? "View Financial Details (Read Only)"
+              : existingTransaction
+              ? "Edit Transaction"
+              : "Add Financial Details"}
           </DialogTitle>
           <DialogDescription>
             {dispatch
@@ -420,6 +426,7 @@ const FinancialDetailsForm = ({
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <fieldset disabled={isReadOnly} className={isReadOnly ? "opacity-90" : ""}>
             <Tabs defaultValue="basic" className="w-full">
               <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="basic">Basic</TabsTrigger>
@@ -765,10 +772,12 @@ const FinancialDetailsForm = ({
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-sm">Revenue & Costs</CardTitle>
-                    <Button type="button" variant="outline" size="sm" onClick={calculateFinancials}>
-                      <Calculator className="w-4 h-4 mr-2" />
-                      Calculate
-                    </Button>
+                    {!isReadOnly && (
+                      <Button type="button" variant="outline" size="sm" onClick={calculateFinancials}>
+                        <Calculator className="w-4 h-4 mr-2" />
+                        Calculate
+                      </Button>
+                    )}
                   </CardHeader>
                   <CardContent className="grid grid-cols-3 gap-4">
                     <FormField
@@ -1217,10 +1226,12 @@ const FinancialDetailsForm = ({
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-sm">Payment Analysis</CardTitle>
-                    <Button type="button" variant="outline" size="sm" onClick={calculateFinancials}>
-                      <Calculator className="w-4 h-4 mr-2" />
-                      Recalculate
-                    </Button>
+                    {!isReadOnly && (
+                      <Button type="button" variant="outline" size="sm" onClick={calculateFinancials}>
+                        <Calculator className="w-4 h-4 mr-2" />
+                        Recalculate
+                      </Button>
+                    )}
                   </CardHeader>
                   <CardContent className="grid grid-cols-3 gap-4">
                     <FormField
@@ -1359,16 +1370,19 @@ const FinancialDetailsForm = ({
                 </Card>
               </TabsContent>
             </Tabs>
+            </fieldset>
 
             <div className="flex justify-end gap-3 pt-4 border-t">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {isReadOnly ? "Close" : "Cancel"}
               </Button>
-              <Button type="submit" disabled={loading}>
-                {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                <Save className="w-4 h-4 mr-2" />
-                {existingTransaction ? "Update" : "Save"} Transaction
-              </Button>
+              {!isReadOnly && (
+                <Button type="submit" disabled={loading}>
+                  {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  <Save className="w-4 h-4 mr-2" />
+                  {existingTransaction ? "Update" : "Save"} Transaction
+                </Button>
+              )}
             </div>
           </form>
         </Form>

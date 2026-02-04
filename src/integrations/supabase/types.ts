@@ -313,6 +313,9 @@ export type Database = {
           vehicle_id: string | null
           approval_status: string | null
           created_by_role: string | null
+          is_historical: boolean | null
+          historical_transaction_id: string | null
+          import_source: string | null
         }
         Insert: {
           actual_delivery?: string | null
@@ -348,6 +351,9 @@ export type Database = {
           total_distance_km?: number | null
           updated_at?: string
           vehicle_id?: string | null
+          is_historical?: boolean | null
+          historical_transaction_id?: string | null
+          import_source?: string | null
         }
         Update: {
           actual_delivery?: string | null
@@ -383,6 +389,9 @@ export type Database = {
           vehicle_id?: string | null
           approval_status?: string | null
           created_by_role?: string | null
+          is_historical?: boolean | null
+          historical_transaction_id?: string | null
+          import_source?: string | null
         }
         Relationships: [
           {

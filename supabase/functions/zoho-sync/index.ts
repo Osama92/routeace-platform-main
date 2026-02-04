@@ -7,8 +7,11 @@ const corsHeaders = {
 };
 
 // Zoho API endpoints
-const ZOHO_ACCOUNTS_URL = 'https://accounts.zoho.com';
-const ZOHO_BOOKS_URL = 'https://books.zoho.com/api/v3';
+// Auth uses accounts.zoho.com, but API calls must use zohoapis.com domain
+// Regional domains: zohoapis.com (US), zohoapis.eu (EU), zohoapis.in (India), zohoapis.com.au (Australia)
+const getZohoRegion = () => Deno.env.get('ZOHO_REGION') || 'com'; // com, eu, in, com.au
+const ZOHO_ACCOUNTS_URL = () => `https://accounts.zoho.${getZohoRegion()}`;
+const ZOHO_BOOKS_URL = () => `https://www.zohoapis.${getZohoRegion()}/books/v3`;
 
 interface ZohoTokenResponse {
   access_token: string;
@@ -32,7 +35,7 @@ async function getZohoAccessToken(): Promise<string> {
     grant_type: 'refresh_token',
   });
 
-  const response = await fetch(`${ZOHO_ACCOUNTS_URL}/oauth/v2/token`, {
+  const response = await fetch(`${ZOHO_ACCOUNTS_URL()}/oauth/v2/token`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -60,7 +63,7 @@ async function syncInvoiceToZoho(
 
   // First, check if customer exists in Zoho or create one
   const customersResponse = await fetch(
-    `${ZOHO_BOOKS_URL}/contacts?organization_id=${organizationId}&contact_name_contains=${encodeURIComponent(customerName)}`,
+    `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name_contains=${encodeURIComponent(customerName)}`,
     {
       headers: {
         'Authorization': `Zoho-oauthtoken ${accessToken}`,
@@ -77,7 +80,7 @@ async function syncInvoiceToZoho(
   } else {
     // Create customer in Zoho
     const createCustomerResponse = await fetch(
-      `${ZOHO_BOOKS_URL}/contacts?organization_id=${organizationId}`,
+      `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}`,
       {
         method: 'POST',
         headers: {
@@ -118,7 +121,7 @@ async function syncInvoiceToZoho(
   };
 
   const createInvoiceResponse = await fetch(
-    `${ZOHO_BOOKS_URL}/invoices?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}`,
     {
       method: 'POST',
       headers: {
@@ -156,7 +159,7 @@ async function syncExpenseToZoho(
   };
 
   const createExpenseResponse = await fetch(
-    `${ZOHO_BOOKS_URL}/expenses?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL()}/expenses?organization_id=${organizationId}`,
     {
       method: 'POST',
       headers: {
@@ -182,7 +185,7 @@ async function fetchInvoicesFromZoho(accessToken: string, organizationId: string
   console.log('Fetching invoices from Zoho...');
   
   const response = await fetch(
-    `${ZOHO_BOOKS_URL}/invoices?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}`,
     {
       headers: {
         'Authorization': `Zoho-oauthtoken ${accessToken}`,
@@ -199,7 +202,7 @@ async function fetchExpensesFromZoho(accessToken: string, organizationId: string
   console.log('Fetching expenses from Zoho...');
   
   const response = await fetch(
-    `${ZOHO_BOOKS_URL}/expenses?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL()}/expenses?organization_id=${organizationId}`,
     {
       headers: {
         'Authorization': `Zoho-oauthtoken ${accessToken}`,
@@ -236,6 +239,14 @@ serve(async (req) => {
     let result: any = { success: true };
 
     switch (action) {
+      case 'test_connection': {
+        // Simple test to verify credentials work
+        // If getZohoAccessToken() succeeded (called above), connection is good
+        result.success = true;
+        result.message = 'Successfully connected to Zoho API';
+        break;
+      }
+
       case 'sync_invoice': {
         // Fetch invoice with customer info
         const { data: invoice, error: invoiceError } = await supabase
