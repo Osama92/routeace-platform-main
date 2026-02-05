@@ -68,6 +68,10 @@ interface DispatchDropoff {
   sequence_order: number;
   latitude?: number | null;
   longitude?: number | null;
+  status?: string | null;
+  status_notes?: string | null;
+  status_updated_at?: string | null;
+  completed_at?: string | null;
 }
 
 interface Dispatch {
@@ -93,6 +97,8 @@ interface Dispatch {
   historical_transaction_id?: string | null;
   import_source?: string | null;
   actual_delivery?: string | null;
+  date_loaded?: string | null;
+  delivery_commenced_at?: string | null;
   drivers?: { full_name: string } | null;
   vehicles?: {
     registration_number: string;
@@ -190,6 +196,8 @@ const DispatchPage = () => {
     vehicle_id: "",
     driver_id: "",
     distance_km: "",
+    date_loaded: "",
+    delivery_commenced_at: "",
   });
 
   // Coordinates for distance calculation
@@ -201,7 +209,9 @@ const DispatchPage = () => {
     status: "",
     location: "",
     notes: "",
+    selectedDropoffId: "", // For updating specific dropoff
   });
+  const [statusDropoffs, setStatusDropoffs] = useState<DispatchDropoff[]>([]);
 
   const [dropoffs, setDropoffs] = useState<Dropoff[]>([]);
   
@@ -217,6 +227,8 @@ const DispatchPage = () => {
     vehicle_id: "",
     driver_id: "",
     distance_km: "",
+    date_loaded: "",
+    delivery_commenced_at: "",
   });
   const [editDropoffs, setEditDropoffs] = useState<Dropoff[]>([]);
 
@@ -530,6 +542,8 @@ const DispatchPage = () => {
         created_by: user?.id,
         approval_status: needsApproval ? "pending" : "approved",
         created_by_role: userRole,
+        date_loaded: formData.date_loaded || null,
+        delivery_commenced_at: formData.delivery_commenced_at || null,
       };
 
       const { data, error } = await supabase.from("dispatches").insert([insertData]).select().single();
@@ -579,6 +593,8 @@ const DispatchPage = () => {
         vehicle_id: "",
         driver_id: "",
         distance_km: "",
+        date_loaded: "",
+        delivery_commenced_at: "",
       });
       setDropoffs([]);
       setPickupCoords(null);
@@ -627,7 +643,8 @@ const DispatchPage = () => {
       });
       setIsStatusDialogOpen(false);
       setSelectedDispatch(null);
-      setStatusUpdate({ status: "", location: "", notes: "" });
+      setStatusUpdate({ status: "", location: "", notes: "", selectedDropoffId: "" });
+      setStatusDropoffs([]);
       fetchData();
     } catch (error: any) {
       // Fallback to direct update if edge function fails
@@ -667,8 +684,8 @@ const DispatchPage = () => {
     }
   };
 
-  // Fetch dropoffs for a specific dispatch
-  const fetchDispatchDropoffs = async (dispatchId: string): Promise<Dropoff[]> => {
+  // Fetch dropoffs for a specific dispatch (full data including status)
+  const fetchDispatchDropoffsFull = async (dispatchId: string): Promise<DispatchDropoff[]> => {
     const { data, error } = await supabase
       .from("dispatch_dropoffs")
       .select("*")
@@ -680,13 +697,71 @@ const DispatchPage = () => {
       return [];
     }
 
-    return (data || []).map((d: DispatchDropoff) => ({
+    return data || [];
+  };
+
+  // Fetch dropoffs for a specific dispatch (simplified for form editing)
+  const fetchDispatchDropoffs = async (dispatchId: string): Promise<Dropoff[]> => {
+    const data = await fetchDispatchDropoffsFull(dispatchId);
+    return data.map((d: DispatchDropoff) => ({
       id: d.id,
       address: d.address,
       notes: d.notes || "",
       latitude: d.latitude,
       longitude: d.longitude,
     }));
+  };
+
+  // Update dropoff status
+  const handleDropoffStatusUpdate = async (dropoffId: string, newStatus: string, notes?: string) => {
+    setSaving(true);
+    try {
+      const updateData: any = {
+        status: newStatus,
+        status_updated_at: new Date().toISOString(),
+        status_notes: notes || null,
+      };
+
+      // If marking as completed, set completed_at timestamp
+      if (newStatus === "completed") {
+        updateData.completed_at = new Date().toISOString();
+        updateData.actual_arrival = new Date().toISOString();
+      }
+
+      const { error } = await supabase
+        .from("dispatch_dropoffs")
+        .update(updateData)
+        .eq("id", dropoffId);
+
+      if (error) throw error;
+
+      // Log the change
+      await logChange({
+        table_name: "dispatch_dropoffs",
+        record_id: dropoffId,
+        action: "update",
+        new_data: { status: newStatus, notes },
+      });
+
+      toast({
+        title: "Drop-off Updated",
+        description: `Drop-off marked as ${newStatus}`,
+      });
+
+      // Refresh dropoffs list
+      if (selectedDispatch) {
+        const updatedDropoffs = await fetchDispatchDropoffsFull(selectedDispatch.id);
+        setStatusDropoffs(updatedDropoffs);
+      }
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update drop-off status",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   // Open edit dialog with dispatch data
@@ -701,12 +776,18 @@ const DispatchPage = () => {
       cargo_description: dispatch.cargo_description || "",
       cargo_weight_kg: dispatch.cargo_weight_kg?.toString() || "",
       priority: dispatch.priority || "normal",
-      scheduled_pickup: dispatch.scheduled_pickup 
-        ? new Date(dispatch.scheduled_pickup).toISOString().slice(0, 16) 
+      scheduled_pickup: dispatch.scheduled_pickup
+        ? new Date(dispatch.scheduled_pickup).toISOString().slice(0, 16)
         : "",
       vehicle_id: dispatch.vehicle_id || "",
       driver_id: dispatch.driver_id || "",
       distance_km: dispatch.distance_km?.toString() || "",
+      date_loaded: dispatch.date_loaded
+        ? new Date(dispatch.date_loaded).toISOString().slice(0, 16)
+        : "",
+      delivery_commenced_at: dispatch.delivery_commenced_at
+        ? new Date(dispatch.delivery_commenced_at).toISOString().slice(0, 16)
+        : "",
     });
 
     // Fetch existing dropoffs
@@ -766,6 +847,8 @@ const DispatchPage = () => {
         return_distance_km: distanceKm,
         total_distance_km: distanceKm ? distanceKm * 2 : null,
         suggested_fuel_liters: suggestedFuel,
+        date_loaded: editFormData.date_loaded || null,
+        delivery_commenced_at: editFormData.delivery_commenced_at || null,
       };
 
       // Update dispatch
@@ -1035,6 +1118,47 @@ const DispatchPage = () => {
                     />
                   </div>
                 </div>
+
+                {/* Transit Date Fields */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="date_loaded">Date Loaded</Label>
+                    <Input
+                      id="date_loaded"
+                      name="date_loaded"
+                      type="datetime-local"
+                      value={formData.date_loaded}
+                      onChange={handleInputChange}
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="delivery_commenced_at">Date Delivery Commenced</Label>
+                    <Input
+                      id="delivery_commenced_at"
+                      name="delivery_commenced_at"
+                      type="datetime-local"
+                      value={formData.delivery_commenced_at}
+                      onChange={handleInputChange}
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                </div>
+
+                {/* Days in Transit Calculator */}
+                {formData.date_loaded && formData.delivery_commenced_at && (
+                  <div className="p-3 bg-info/10 rounded-lg border border-info/20">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Days in Transit</span>
+                      <span className="font-semibold text-info">
+                        {Math.ceil(
+                          (new Date(formData.delivery_commenced_at).getTime() - new Date(formData.date_loaded).getTime()) /
+                          (1000 * 60 * 60 * 24)
+                        )} day(s)
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Vehicle & Driver Assignment */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1310,9 +1434,12 @@ const DispatchPage = () => {
                   <Button
                     size="sm"
                     className="flex-1 min-w-[120px]"
-                    onClick={() => {
+                    onClick={async () => {
                       setSelectedDispatch(dispatch);
-                      setStatusUpdate({ status: "", location: "", notes: "" });
+                      setStatusUpdate({ status: "", location: "", notes: "", selectedDropoffId: "" });
+                      // Fetch dropoffs for this dispatch
+                      const dropoffs = await fetchDispatchDropoffsFull(dispatch.id);
+                      setStatusDropoffs(dropoffs);
                       setIsStatusDialogOpen(true);
                     }}
                   >
@@ -1320,8 +1447,8 @@ const DispatchPage = () => {
                     Update Status
                   </Button>
                 )}
-                {/* Add/View Financial Details button for delivered dispatches - Admin only */}
-                {hasAnyRole(["admin"]) && dispatch.status === "delivered" && (
+                {/* Add/View Financial Details button - Admin can access anytime, others only for delivered */}
+                {hasAnyRole(["admin"]) && dispatch.status !== "cancelled" && (
                   <Button
                     size="sm"
                     variant="secondary"
@@ -1332,7 +1459,7 @@ const DispatchPage = () => {
                     }}
                   >
                     <DollarSign className="w-4 h-4 mr-1" />
-                    {dispatch.is_historical ? "View Financials" : "Add Financials"}
+                    {dispatch.is_historical ? "View Financials" : "Financials"}
                   </Button>
                 )}
               </div>
@@ -1343,7 +1470,7 @@ const DispatchPage = () => {
 
       {/* Status Update Dialog */}
       <Dialog open={isStatusDialogOpen} onOpenChange={setIsStatusDialogOpen}>
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="font-heading">Update Delivery Status</DialogTitle>
             <DialogDescription>
@@ -1351,8 +1478,9 @@ const DispatchPage = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            {/* Main Dispatch Status */}
             <div className="space-y-2">
-              <Label>New Status</Label>
+              <Label>Dispatch Status</Label>
               <Select
                 value={statusUpdate.status}
                 onValueChange={(value) => setStatusUpdate((prev) => ({ ...prev, status: value }))}
@@ -1387,13 +1515,98 @@ const DispatchPage = () => {
                 className="bg-secondary/50"
               />
             </div>
+
+            {/* Drop-off Points Status Section */}
+            {statusDropoffs.length > 0 && (
+              <div className="space-y-3 pt-4 border-t">
+                <Label className="text-base font-semibold flex items-center gap-2">
+                  <MapPin className="w-4 h-4" />
+                  Drop-off Points ({statusDropoffs.length})
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Update status for each drop-off location
+                </p>
+                <div className="space-y-3">
+                  {statusDropoffs.map((dropoff, index) => {
+                    const dropoffStatusColors: Record<string, string> = {
+                      pending: "bg-muted text-muted-foreground",
+                      arrived: "bg-info/15 text-info",
+                      completed: "bg-success/15 text-success",
+                      skipped: "bg-destructive/15 text-destructive",
+                    };
+                    const currentStatus = dropoff.status || "pending";
+                    return (
+                      <div
+                        key={dropoff.id}
+                        className="p-3 rounded-lg border bg-secondary/30 space-y-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-muted-foreground">
+                                Stop {index + 1}
+                              </span>
+                              <Badge className={`text-xs ${dropoffStatusColors[currentStatus]}`}>
+                                {currentStatus}
+                              </Badge>
+                            </div>
+                            <p className="text-sm font-medium truncate mt-1">
+                              {dropoff.address}
+                            </p>
+                            {dropoff.notes && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {dropoff.notes}
+                              </p>
+                            )}
+                            {dropoff.status_updated_at && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Updated: {format(new Date(dropoff.status_updated_at), "MMM dd, HH:mm")}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          <Button
+                            size="sm"
+                            variant={currentStatus === "arrived" ? "default" : "outline"}
+                            className="text-xs h-7"
+                            onClick={() => handleDropoffStatusUpdate(dropoff.id, "arrived")}
+                            disabled={saving || currentStatus === "completed"}
+                          >
+                            Arrived
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={currentStatus === "completed" ? "default" : "outline"}
+                            className="text-xs h-7"
+                            onClick={() => handleDropoffStatusUpdate(dropoff.id, "completed")}
+                            disabled={saving}
+                          >
+                            Completed
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs h-7 text-destructive hover:text-destructive"
+                            onClick={() => handleDropoffStatusUpdate(dropoff.id, "skipped", "Location skipped")}
+                            disabled={saving || currentStatus === "completed"}
+                          >
+                            Skip
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
             <Button variant="outline" onClick={() => setIsStatusDialogOpen(false)}>
               Cancel
             </Button>
             <Button onClick={handleStatusUpdate} disabled={saving}>
-              {saving ? "Updating..." : "Update Status"}
+              {saving ? "Updating..." : "Update Dispatch Status"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1439,6 +1652,29 @@ const DispatchPage = () => {
                   <p className="text-xs text-muted-foreground">Vehicle</p>
                   <p className="font-medium">{selectedDispatch.vehicles?.registration_number || "—"}</p>
                 </div>
+                {selectedDispatch.date_loaded && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Date Loaded</p>
+                    <p className="font-medium">{format(new Date(selectedDispatch.date_loaded), "MMM dd, yyyy HH:mm")}</p>
+                  </div>
+                )}
+                {selectedDispatch.delivery_commenced_at && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Delivery Commenced</p>
+                    <p className="font-medium">{format(new Date(selectedDispatch.delivery_commenced_at), "MMM dd, yyyy HH:mm")}</p>
+                  </div>
+                )}
+                {selectedDispatch.date_loaded && selectedDispatch.delivery_commenced_at && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Days in Transit</p>
+                    <p className="font-semibold text-info">
+                      {Math.ceil(
+                        (new Date(selectedDispatch.delivery_commenced_at).getTime() - new Date(selectedDispatch.date_loaded).getTime()) /
+                        (1000 * 60 * 60 * 24)
+                      )} day(s)
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Route Map View */}
@@ -1578,6 +1814,47 @@ const DispatchPage = () => {
                 />
               </div>
             </div>
+
+            {/* Transit Date Fields */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_date_loaded">Date Loaded</Label>
+                <Input
+                  id="edit_date_loaded"
+                  name="date_loaded"
+                  type="datetime-local"
+                  value={editFormData.date_loaded}
+                  onChange={handleEditInputChange}
+                  className="bg-secondary/50"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_delivery_commenced_at">Date Delivery Commenced</Label>
+                <Input
+                  id="edit_delivery_commenced_at"
+                  name="delivery_commenced_at"
+                  type="datetime-local"
+                  value={editFormData.delivery_commenced_at}
+                  onChange={handleEditInputChange}
+                  className="bg-secondary/50"
+                />
+              </div>
+            </div>
+
+            {/* Days in Transit Calculator */}
+            {editFormData.date_loaded && editFormData.delivery_commenced_at && (
+              <div className="p-3 bg-info/10 rounded-lg border border-info/20">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Days in Transit</span>
+                  <span className="font-semibold text-info">
+                    {Math.ceil(
+                      (new Date(editFormData.delivery_commenced_at).getTime() - new Date(editFormData.date_loaded).getTime()) /
+                      (1000 * 60 * 60 * 24)
+                    )} day(s)
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Vehicle & Driver Assignment */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

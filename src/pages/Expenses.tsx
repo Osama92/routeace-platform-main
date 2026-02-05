@@ -74,6 +74,8 @@ interface Expense {
   is_cogs: boolean;
   cogs_vendor_id: string | null;
   created_at: string;
+  zoho_expense_id: string | null;
+  zoho_synced_at: string | null;
 }
 
 interface Partner {
@@ -96,6 +98,10 @@ const expenseCategories = [
   { value: "fuel", label: "Fuel", icon: Fuel, color: "text-orange-500" },
   { value: "maintenance", label: "Maintenance", icon: Wrench, color: "text-blue-500" },
   { value: "driver_salary", label: "Driver Salary", icon: Users, color: "text-green-500" },
+  { value: "employee_salary", label: "Employee Salary", icon: Users, color: "text-lime-500" },
+  { value: "vat", label: "VAT", icon: FileText, color: "text-rose-500" },
+  { value: "interest_payment", label: "Interest Payment", icon: TrendingDown, color: "text-red-600" },
+  { value: "commission", label: "Commission", icon: CircleDollarSign, color: "text-violet-500" },
   { value: "insurance", label: "Insurance", icon: Shield, color: "text-purple-500" },
   { value: "tolls", label: "Tolls", icon: CircleDollarSign, color: "text-yellow-500" },
   { value: "parking", label: "Parking", icon: Car, color: "text-cyan-500" },
@@ -317,11 +323,14 @@ const Expenses = () => {
     setReceiptPreview("");
   };
 
-  const syncToZoho = async () => {
+  const syncToZoho = async (expenseId?: string) => {
     setSyncing(true);
     try {
       const { data, error } = await supabase.functions.invoke('zoho-sync', {
-        body: { action: 'sync_all_expenses' },
+        body: {
+          action: expenseId ? 'sync_expense' : 'sync_all_expenses',
+          expenseId,
+        },
       });
 
       if (error) throw error;
@@ -329,7 +338,9 @@ const Expenses = () => {
       if (data.success) {
         toast({
           title: "Synced to Zoho",
-          description: `Synced ${data.synced} expenses, ${data.failed} failed`,
+          description: expenseId
+            ? "Expense synced successfully"
+            : `Synced ${data.synced} expenses, ${data.failed} failed`,
         });
         fetchData();
       } else {
@@ -516,7 +527,7 @@ const Expenses = () => {
           <>
             <Button
               variant="outline"
-              onClick={syncToZoho}
+              onClick={() => syncToZoho()}
               disabled={syncing}
             >
               {syncing ? (
@@ -789,12 +800,14 @@ const Expenses = () => {
               <TableHead className="text-muted-foreground">Type</TableHead>
               <TableHead className="text-muted-foreground">Amount</TableHead>
               <TableHead className="text-muted-foreground">Receipt</TableHead>
+              <TableHead className="text-muted-foreground">Zoho</TableHead>
+              {canManage && <TableHead className="text-muted-foreground">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8">
+                <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8">
                   <div className="flex items-center justify-center gap-2">
                     <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                     Loading expenses...
@@ -803,7 +816,7 @@ const Expenses = () => {
               </TableRow>
             ) : filteredExpenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
                   No expenses found
                 </TableCell>
               </TableRow>
@@ -852,6 +865,35 @@ const Expenses = () => {
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
+                    <TableCell>
+                      {expense.zoho_synced_at ? (
+                        <div className="flex flex-col">
+                          <span className="text-xs text-green-500 font-medium">Synced</span>
+                          <span className="text-xs text-muted-foreground">
+                            {format(new Date(expense.zoho_synced_at), "MMM dd, HH:mm")}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Not synced</span>
+                      )}
+                    </TableCell>
+                    {canManage && (
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => syncToZoho(expense.id)}
+                          disabled={syncing}
+                          title={expense.zoho_synced_at ? "Re-sync to Zoho" : "Sync to Zoho"}
+                        >
+                          {syncing ? (
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <CloudUpload className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })

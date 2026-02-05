@@ -127,19 +127,54 @@ interface PayrollBatch {
   records: PayrollHistoryRecord[];
 }
 
-// Nigeria Tax Act 2025 Personal Income Tax Brackets
-const calculateNigeriaTax = (annualIncome: number): { tax: number; effectiveRate: number; brackets: { range: string; rate: number; taxable: number; tax: number }[] } => {
+// Nigeria Tax Act 2025 - Personal Income Tax (PIT) Calculator
+// Effective from January 1, 2026
+// Reference: https://www.ey.com/en_gl/technical/tax-alerts/nigeria-tax-act-2025-has-been-signed-highlights
+interface TaxCalculationResult {
+  grossIncome: number;
+  taxFreeAmount: number;  // First ₦800,000 is tax-free under NTA 2025
+  taxableIncome: number;
+  tax: number;
+  effectiveRate: number;
+  isExempt: boolean;  // Income ≤₦800,000 is fully exempt
+  brackets: { range: string; rate: number; taxable: number; tax: number }[];
+}
+
+const calculateNigeriaTax = (annualIncome: number): TaxCalculationResult => {
+  // Nigeria Tax Act 2025: First ₦800,000 is tax-free
+  const TAX_FREE_THRESHOLD = 800000;
+
+  // If income is at or below the tax-free threshold, no tax
+  if (annualIncome <= TAX_FREE_THRESHOLD) {
+    return {
+      grossIncome: annualIncome,
+      taxFreeAmount: annualIncome,
+      taxableIncome: 0,
+      tax: 0,
+      effectiveRate: 0,
+      isExempt: true,
+      brackets: []
+    };
+  }
+
+  // Taxable income = Gross Income - Tax-free threshold (₦800,000)
+  const taxFreeAmount = TAX_FREE_THRESHOLD;
+  const taxableIncome = annualIncome - TAX_FREE_THRESHOLD;
+
+  // Apply graduated tax rates to taxable income (income above ₦800,000)
+  // Nigeria Tax Act 2025 brackets (effective Jan 1, 2026)
   let tax = 0;
-  let remaining = annualIncome;
+  let remaining = taxableIncome;
   const bracketDetails: { range: string; rate: number; taxable: number; tax: number }[] = [];
 
+  // Tax brackets based on Nigeria Tax Act 2025 Fourth Schedule
+  // These apply to income ABOVE the ₦800,000 tax-free threshold
   const brackets = [
-    { limit: 300000, rate: 0.07, label: "First ₦300,000" },
-    { limit: 300000, rate: 0.11, label: "Next ₦300,000" },
-    { limit: 500000, rate: 0.15, label: "Next ₦500,000" },
-    { limit: 500000, rate: 0.19, label: "Next ₦500,000" },
-    { limit: 1600000, rate: 0.21, label: "Next ₦1,600,000" },
-    { limit: Infinity, rate: 0.24, label: "Above ₦3,200,000" },
+    { limit: 2200000, rate: 0.15, label: "₦800,001 - ₦3,000,000" },     // Next ₦2.2M at 15%
+    { limit: 9000000, rate: 0.18, label: "₦3,000,001 - ₦12,000,000" },  // Next ₦9M at 18%
+    { limit: 13000000, rate: 0.21, label: "₦12,000,001 - ₦25,000,000" }, // Next ₦13M at 21%
+    { limit: 25000000, rate: 0.23, label: "₦25,000,001 - ₦50,000,000" }, // Next ₦25M at 23%
+    { limit: Infinity, rate: 0.25, label: "Above ₦50,000,000" },         // Above ₦50M at 25%
   ];
 
   for (const bracket of brackets) {
@@ -148,7 +183,7 @@ const calculateNigeriaTax = (annualIncome: number): { tax: number; effectiveRate
     const bracketTax = taxable * bracket.rate;
     tax += bracketTax;
     remaining -= taxable;
-    
+
     if (taxable > 0) {
       bracketDetails.push({
         range: bracket.label,
@@ -159,8 +194,18 @@ const calculateNigeriaTax = (annualIncome: number): { tax: number; effectiveRate
     }
   }
 
+  // Note: Minimum tax has been abolished under Nigeria Tax Act 2025
   const effectiveRate = annualIncome > 0 ? (tax / annualIncome) * 100 : 0;
-  return { tax, effectiveRate, brackets: bracketDetails };
+
+  return {
+    grossIncome: annualIncome,
+    taxFreeAmount,
+    taxableIncome,
+    tax,
+    effectiveRate,
+    isExempt: false,
+    brackets: bracketDetails
+  };
 };
 
 const formatCurrency = (amount: number) => {
@@ -640,7 +685,6 @@ const DriverPayrollPage = () => {
   const generatePayslipPDF = (payroll: PayrollSummary) => {
     const doc = new jsPDF();
     const periodLabel = monthOptions.find((m) => m.value === selectedMonth)?.label || selectedMonth;
-    const { brackets } = calculateNigeriaTax(payroll.grossMonthly * 12);
 
     // Header
     doc.setFillColor(26, 54, 93);
@@ -761,34 +805,37 @@ const DriverPayrollPage = () => {
       zoneBreakdownEndY = (doc as any).lastAutoTable.finalY;
     }
 
-    // Tax Breakdown
+    // Tax Deductions Summary (simplified - no bracket breakdown)
     const taxStartY = zoneBreakdownEndY + 15;
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
-    doc.text("Tax Calculation (Nigeria PIT 2025)", 15, taxStartY);
+    doc.text("Tax Deductions (Nigeria PIT)", 15, taxStartY);
 
-    const taxData = brackets.map(b => [
-      b.range,
-      `${b.rate.toFixed(0)}%`,
-      formatCurrency(b.taxable),
-      formatCurrency(b.tax)
-    ]);
-    
-    taxData.push(["", "", "Annual Tax", formatCurrency(payroll.annualTax)]);
-    taxData.push(["", "", "Monthly Withholding", formatCurrency(payroll.monthlyTax)]);
-    taxData.push(["", "", "Effective Rate", `${payroll.effectiveRate.toFixed(2)}%`]);
+    const taxCalculation = calculateNigeriaTax(payroll.grossMonthly * 12);
+
+    const taxSummaryData = taxCalculation.isExempt
+      ? [
+          ["Status", "EXEMPT (Income ≤₦800,000)"],
+          ["Annual Tax", formatCurrency(0)],
+          ["Monthly Withholding", formatCurrency(0)],
+        ]
+      : [
+          ["Tax-Free Amount (First ₦800,000)", formatCurrency(taxCalculation.taxFreeAmount)],
+          ["Taxable Income (Annual)", formatCurrency(taxCalculation.taxableIncome)],
+          ["Annual Tax", formatCurrency(payroll.annualTax)],
+          ["Monthly Withholding", formatCurrency(payroll.monthlyTax)],
+          ["Effective Rate", `${payroll.effectiveRate.toFixed(2)}%`],
+        ];
 
     autoTable(doc, {
       startY: taxStartY + 5,
-      head: [["Tax Bracket", "Rate", "Taxable Amount", "Tax"]],
-      body: taxData,
+      head: [],
+      body: taxSummaryData,
       theme: "striped",
       headStyles: { fillColor: [180, 83, 9] },
       columnStyles: {
-        0: { cellWidth: 50 },
-        1: { cellWidth: 25, halign: "center" },
-        2: { cellWidth: 45, halign: "right" },
-        3: { cellWidth: 40, halign: "right" }
+        0: { fontStyle: "bold", cellWidth: 80 },
+        1: { cellWidth: 60, halign: "right" }
       },
       margin: { left: 15 }
     });
@@ -1478,26 +1525,76 @@ const DriverPayrollPage = () => {
               )}
 
               {/* Tax Breakdown */}
-              <div className="p-4 bg-warning/5 rounded-lg border border-warning/20">
-                <div className="flex items-center gap-2 mb-4">
-                  <Percent className="w-5 h-5 text-warning" />
-                  <span className="font-medium">Tax Calculation (Nigeria PIT 2025)</span>
-                </div>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Annual Tax Liability</span>
-                    <span className="font-medium text-destructive">-{formatCurrency(selectedDriver.annualTax)}</span>
+              {(() => {
+                const taxDetails = calculateNigeriaTax(selectedDriver.grossMonthly * 12);
+                return (
+                  <div className="p-4 bg-warning/5 rounded-lg border border-warning/20">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Percent className="w-5 h-5 text-warning" />
+                      <span className="font-medium">Tax Calculation (Nigeria Tax Act 2025)</span>
+                    </div>
+
+                    {taxDetails.isExempt ? (
+                      <div className="p-3 bg-success/10 rounded-lg border border-success/20 text-center">
+                        <Badge variant="default" className="bg-success">EXEMPT</Badge>
+                        <p className="text-sm text-muted-foreground mt-2">
+                          Income ≤₦800,000/year is tax-free under Nigeria Tax Act 2025
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Tax-Free Amount */}
+                        <div className="space-y-2 pb-3 border-b border-warning/20">
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tax-Free Threshold</p>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">First ₦800,000 (Tax-Free)</span>
+                            <span className="font-medium text-success">{formatCurrency(taxDetails.taxFreeAmount)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Taxable Income</span>
+                            <span className="font-medium">{formatCurrency(taxDetails.taxableIncome)}</span>
+                          </div>
+                        </div>
+
+                        {/* Tax Bracket Breakdown */}
+                        {taxDetails.brackets.length > 0 && (
+                          <div className="space-y-2 pb-3 border-b border-warning/20">
+                            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tax Bracket Breakdown</p>
+                            <div className="space-y-1.5">
+                              {taxDetails.brackets.map((bracket, idx) => (
+                                <div key={idx} className="flex justify-between text-xs">
+                                  <span className="text-muted-foreground">
+                                    {bracket.range} @ {bracket.rate.toFixed(0)}%
+                                  </span>
+                                  <span className="font-mono">
+                                    {formatCurrency(bracket.taxable)} → {formatCurrency(bracket.tax)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Summary */}
+                        <div className="space-y-2">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Annual Tax Liability</span>
+                            <span className="font-medium text-destructive">-{formatCurrency(selectedDriver.annualTax)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Monthly Withholding</span>
+                            <span className="font-semibold text-destructive">-{formatCurrency(selectedDriver.monthlyTax)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Effective Tax Rate</span>
+                            <span className="font-medium">{selectedDriver.effectiveRate.toFixed(2)}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Monthly Withholding</span>
-                    <span className="font-semibold text-destructive">-{formatCurrency(selectedDriver.monthlyTax)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Effective Tax Rate</span>
-                    <span className="font-medium">{selectedDriver.effectiveRate.toFixed(2)}%</span>
-                  </div>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Net Pay */}
               <div className="p-4 bg-success/5 rounded-lg border border-success/20">

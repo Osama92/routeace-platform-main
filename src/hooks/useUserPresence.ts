@@ -109,11 +109,14 @@ export const useUserPresence = () => {
       .on("presence", { event: "leave" }, () => {
         fetchOnlineUsers();
       })
-      .subscribe(async (status) => {
+      .subscribe(async (status, err) => {
         if (status === "SUBSCRIBED") {
           channelRef.current = channel;
           // Update presence when subscribed
           await updatePresence("online", window.location.pathname);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          // Silently handle realtime connection errors - fall back to DB polling
+          console.warn("Realtime presence channel error, using DB fallback");
         }
       });
 

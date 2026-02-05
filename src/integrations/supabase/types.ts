@@ -235,6 +235,7 @@ export type Database = {
         Row: {
           actual_arrival: string | null
           address: string
+          completed_at: string | null
           created_at: string | null
           dispatch_id: string | null
           estimated_arrival: string | null
@@ -243,10 +244,14 @@ export type Database = {
           longitude: number | null
           notes: string | null
           sequence_order: number
+          status: string | null
+          status_notes: string | null
+          status_updated_at: string | null
         }
         Insert: {
           actual_arrival?: string | null
           address: string
+          completed_at?: string | null
           created_at?: string | null
           dispatch_id?: string | null
           estimated_arrival?: string | null
@@ -255,10 +260,14 @@ export type Database = {
           longitude?: number | null
           notes?: string | null
           sequence_order: number
+          status?: string | null
+          status_notes?: string | null
+          status_updated_at?: string | null
         }
         Update: {
           actual_arrival?: string | null
           address?: string
+          completed_at?: string | null
           created_at?: string | null
           dispatch_id?: string | null
           estimated_arrival?: string | null
@@ -267,6 +276,9 @@ export type Database = {
           longitude?: number | null
           notes?: string | null
           sequence_order?: number
+          status?: string | null
+          status_notes?: string | null
+          status_updated_at?: string | null
         }
         Relationships: [
           {
@@ -289,7 +301,9 @@ export type Database = {
           created_at: string
           created_by: string | null
           customer_id: string
+          date_loaded: string | null
           delivery_address: string
+          delivery_commenced_at: string | null
           delivery_lat: number | null
           delivery_lng: number | null
           dispatch_number: string
@@ -329,7 +343,9 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           customer_id: string
+          date_loaded?: string | null
           delivery_address: string
+          delivery_commenced_at?: string | null
           delivery_lat?: number | null
           delivery_lng?: number | null
           dispatch_number: string
@@ -365,7 +381,9 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           customer_id?: string
+          date_loaded?: string | null
           delivery_address?: string
+          delivery_commenced_at?: string | null
           delivery_lat?: number | null
           delivery_lng?: number | null
           dispatch_number?: string

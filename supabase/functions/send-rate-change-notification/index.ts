@@ -193,7 +193,7 @@ serve(async (req) => {
     for (const email of recipientEmails) {
       try {
         await resend.emails.send({
-          from: "RouteAce <onboarding@resend.dev>",
+          from: "Glyde Services <noreply@support.glydeservicesng.com>",
           to: [email],
           subject,
           html: htmlBody,

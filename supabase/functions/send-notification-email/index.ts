@@ -119,7 +119,7 @@ serve(async (req) => {
 
     try {
       const emailResponse = await resend.emails.send({
-        from: "Glyde Services <onboarding@resend.dev>",
+        from: "Glyde Services <noreply@support.glydeservicesng.com>",
         to: [payload.recipient_email],
         subject: finalSubject,
         html: payload.body.replace(/\n/g, "<br/>"),

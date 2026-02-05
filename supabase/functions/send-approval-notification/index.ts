@@ -181,7 +181,7 @@ serve(async (req) => {
 
     try {
       const emailResponse = await resend.emails.send({
-        from: "RouteAce <onboarding@resend.dev>",
+        from: "Glyde Services <noreply@support.glydeservicesng.com>",
         to: [submitterEmail],
         subject,
         html: body,

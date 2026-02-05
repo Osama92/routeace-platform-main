@@ -114,24 +114,59 @@ const Dashboard = () => {
         avgCostPerKm = totalDistanceKm > 0 ? totalCost / totalDistanceKm : 0;
       }
 
-      // Completion rate - count dispatches delivered this month vs total created this month
-      // Use updated_at for delivered count (when status changed to delivered)
-      const { count: deliveredCount } = await supabase
+      // On-Time Delivery (OTD) - based on transit days with 2-day target
+      // A delivery is "on-time" if days in transit (from date_loaded to delivery_commenced_at) <= 2 days
+      const OTD_TARGET_DAYS = 2;
+
+      // Get all delivered dispatches this month that have transit date data
+      const { data: deliveredWithDates } = await supabase
         .from("dispatches")
-        .select("id", { count: "exact", head: true })
+        .select("id, date_loaded, delivery_commenced_at, actual_delivery")
         .eq("status", "delivered")
         .gte("updated_at", start);
 
-      const { count: totalDispatchCount } = await supabase
-        .from("dispatches")
-        .select("id", { count: "exact", head: true })
-        .gte("created_at", start)
-        .not("status", "eq", "cancelled");
+      // Calculate OTD rate
+      let onTimeCount = 0;
+      let totalWithTransitData = 0;
 
-      // Completion rate = delivered this month / total created this month
-      const onTimeRate = totalDispatchCount && totalDispatchCount > 0
-        ? ((deliveredCount || 0) / totalDispatchCount) * 100
-        : 0;
+      (deliveredWithDates || []).forEach((dispatch: any) => {
+        // Use delivery_commenced_at if available, otherwise fall back to actual_delivery
+        const startDate = dispatch.date_loaded;
+        const endDate = dispatch.delivery_commenced_at || dispatch.actual_delivery;
+
+        if (startDate && endDate) {
+          totalWithTransitData++;
+          const daysInTransit = Math.ceil(
+            (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)
+          );
+          if (daysInTransit <= OTD_TARGET_DAYS) {
+            onTimeCount++;
+          }
+        }
+      });
+
+      // If no transit data available, fall back to completion rate
+      let onTimeRate = 0;
+      if (totalWithTransitData > 0) {
+        onTimeRate = (onTimeCount / totalWithTransitData) * 100;
+      } else {
+        // Fallback: use completion rate (delivered / total non-cancelled)
+        const { count: deliveredCount } = await supabase
+          .from("dispatches")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "delivered")
+          .gte("updated_at", start);
+
+        const { count: totalDispatchCount } = await supabase
+          .from("dispatches")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", start)
+          .not("status", "eq", "cancelled");
+
+        onTimeRate = totalDispatchCount && totalDispatchCount > 0
+          ? ((deliveredCount || 0) / totalDispatchCount) * 100
+          : 0;
+      }
 
       // Fleet utilization: vehicles currently assigned to active dispatches / total available/in_use vehicles
       const { count: totalVehicles } = await supabase
@@ -179,12 +214,12 @@ const Dashboard = () => {
           isFinancial: false,
         },
         {
-          title: "On-Time Delivery (MTD)",
+          title: "OTD Rate (≤2 days)",
           value: `${kpis.onTimeRate.toFixed(1)}%`,
-          change: "This month",
-          changeType: "positive" as const,
+          change: "Target: 2-day transit",
+          changeType: kpis.onTimeRate >= 80 ? "positive" as const : kpis.onTimeRate >= 50 ? "neutral" as const : "negative" as const,
           icon: Clock,
-          link: "/driver-performance",
+          link: "/dispatch",
           isFinancial: false,
         },
         {

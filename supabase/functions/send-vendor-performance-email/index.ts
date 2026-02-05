@@ -146,7 +146,7 @@ serve(async (req) => {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              from: "RouteAce <noreply@routeace.com>",
+              from: "Glyde Services <noreply@support.glydeservicesng.com>",
               to: vendor.vendorEmail,
               subject: `Weekly Performance Report - Week ${currentWeek} | ${vendor.vendorName}`,
               html: emailHtml,

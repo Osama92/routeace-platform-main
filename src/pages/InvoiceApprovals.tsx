@@ -105,7 +105,22 @@ const approvalStatusConfig: Record<string, { label: string; className: string; i
     className: "bg-warning/15 text-warning",
     icon: Clock,
   },
+  pending_1st_approval: {
+    label: "Pending 1st Approval",
+    className: "bg-warning/15 text-warning",
+    icon: Clock,
+  },
+  pending: {
+    label: "Pending 1st Approval",
+    className: "bg-warning/15 text-warning",
+    icon: Clock,
+  },
   pending_second_approval: {
+    label: "Pending 2nd Approval",
+    className: "bg-info/15 text-info",
+    icon: Clock,
+  },
+  pending_2nd_approval: {
     label: "Pending 2nd Approval",
     className: "bg-info/15 text-info",
     icon: Clock,
@@ -122,6 +137,12 @@ const approvalStatusConfig: Record<string, { label: string; className: string; i
   },
 };
 
+// Helper to get normalized status config
+const getStatusConfig = (status: string | null) => {
+  if (!status) return approvalStatusConfig.pending_first_approval;
+  return approvalStatusConfig[status] || approvalStatusConfig.pending_first_approval;
+};
+
 const InvoiceApprovalsPage = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,7 +152,7 @@ const InvoiceApprovalsPage = () => {
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [processing, setProcessing] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<string>("pending");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [userApprovalRoles, setUserApprovalRoles] = useState<ApprovalRole[]>([]);
   const { toast } = useToast();
   const { user, hasRole } = useAuth();
@@ -380,8 +401,16 @@ const InvoiceApprovalsPage = () => {
     }
   };
 
-  const pendingFirst = invoices.filter(inv => inv.approval_status === "pending_first_approval");
-  const pendingSecond = invoices.filter(inv => inv.approval_status === "pending_second_approval");
+  // Calculate stats - handle both exact match and partial matches for approval_status
+  const pendingFirst = invoices.filter(inv =>
+    inv.approval_status === "pending_first_approval" ||
+    inv.approval_status === "pending" ||
+    inv.approval_status === "pending_1st_approval"
+  );
+  const pendingSecond = invoices.filter(inv =>
+    inv.approval_status === "pending_second_approval" ||
+    inv.approval_status === "pending_2nd_approval"
+  );
   const approved = invoices.filter(inv => inv.approval_status === "approved");
   const rejected = invoices.filter(inv => inv.approval_status === "rejected");
 
@@ -389,12 +418,37 @@ const InvoiceApprovalsPage = () => {
     const matchesSearch =
       invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
       invoice.customers?.company_name?.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    if (statusFilter === "pending") {
-      return matchesSearch && (invoice.approval_status === "pending_first_approval" || invoice.approval_status === "pending_second_approval");
-    } else if (statusFilter === "all") {
+
+    if (statusFilter === "all") {
       return matchesSearch;
     }
+
+    if (statusFilter === "pending") {
+      // Match all pending states
+      return matchesSearch && (
+        invoice.approval_status === "pending_first_approval" ||
+        invoice.approval_status === "pending_second_approval" ||
+        invoice.approval_status === "pending" ||
+        invoice.approval_status === "pending_1st_approval" ||
+        invoice.approval_status === "pending_2nd_approval"
+      );
+    }
+
+    if (statusFilter === "pending_first_approval") {
+      return matchesSearch && (
+        invoice.approval_status === "pending_first_approval" ||
+        invoice.approval_status === "pending" ||
+        invoice.approval_status === "pending_1st_approval"
+      );
+    }
+
+    if (statusFilter === "pending_second_approval") {
+      return matchesSearch && (
+        invoice.approval_status === "pending_second_approval" ||
+        invoice.approval_status === "pending_2nd_approval"
+      );
+    }
+
     return matchesSearch && invoice.approval_status === statusFilter;
   });
 
@@ -408,9 +462,10 @@ const InvoiceApprovalsPage = () => {
         {[
           { label: "Pending 1st Approval", value: pendingFirst.length, icon: Clock, color: "bg-warning/10 text-warning" },
           { label: "Pending 2nd Approval", value: pendingSecond.length, icon: AlertCircle, color: "bg-info/10 text-info" },
-          { label: "Approved Today", value: approved.filter(inv => 
-            new Date(inv.second_approved_at || "").toDateString() === new Date().toDateString()
-          ).length, icon: CheckCircle, color: "bg-success/10 text-success" },
+          { label: "Approved Today", value: approved.filter(inv => {
+            const approvalDate = inv.second_approved_at || inv.first_approved_at;
+            return approvalDate && new Date(approvalDate).toDateString() === new Date().toDateString();
+          }).length, icon: CheckCircle, color: "bg-success/10 text-success" },
           { label: "Rejected", value: rejected.length, icon: XCircle, color: "bg-destructive/10 text-destructive" },
         ].map((stat, index) => (
           <motion.div
@@ -490,7 +545,7 @@ const InvoiceApprovalsPage = () => {
             </TableHeader>
             <TableBody>
               {filteredInvoices.map((invoice) => {
-                const statusInfo = approvalStatusConfig[invoice.approval_status || ""] || approvalStatusConfig.pending_first_approval;
+                const statusInfo = getStatusConfig(invoice.approval_status);
                 const StatusIcon = statusInfo.icon;
 
                 return (
@@ -550,8 +605,8 @@ const InvoiceApprovalsPage = () => {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">Status</p>
-                  <Badge className={approvalStatusConfig[selectedInvoice.approval_status || ""]?.className}>
-                    {approvalStatusConfig[selectedInvoice.approval_status || ""]?.label}
+                  <Badge className={getStatusConfig(selectedInvoice.approval_status).className}>
+                    {getStatusConfig(selectedInvoice.approval_status).label}
                   </Badge>
                 </div>
                 <div className="space-y-1">
@@ -660,7 +715,9 @@ const InvoiceApprovalsPage = () => {
           )}
 
           <DialogFooter className="gap-2 flex-wrap">
-            {selectedInvoice?.approval_status === "pending_first_approval" && (
+            {(selectedInvoice?.approval_status === "pending_first_approval" ||
+              selectedInvoice?.approval_status === "pending" ||
+              selectedInvoice?.approval_status === "pending_1st_approval") && (
               <>
                 {!canFirstApprove && (
                   <p className="text-xs text-muted-foreground w-full text-center mb-2">
@@ -684,7 +741,8 @@ const InvoiceApprovalsPage = () => {
                 </Button>
               </>
             )}
-            {selectedInvoice?.approval_status === "pending_second_approval" && (
+            {(selectedInvoice?.approval_status === "pending_second_approval" ||
+              selectedInvoice?.approval_status === "pending_2nd_approval") && (
               <>
                 {!canSecondApprove && (
                   <p className="text-xs text-muted-foreground w-full text-center mb-2">

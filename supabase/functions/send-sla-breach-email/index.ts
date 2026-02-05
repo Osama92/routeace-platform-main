@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
     `;
 
     const emailResponse = await resend.emails.send({
-      from: 'RouteAce <onboarding@resend.dev>',
+      from: 'Glyde Services <noreply@support.glydeservicesng.com>',
       to: allRecipients,
       subject: `🚨 SLA Breach Alert: ${payload.dispatchNumber} - ${breachTypeLabel}`,
       html: emailHtml,
