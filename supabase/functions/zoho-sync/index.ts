@@ -143,6 +143,75 @@ async function syncInvoiceToZoho(
   return null;
 }
 
+// Map RouteAce expense categories to Zoho account names
+const expenseCategoryToZohoAccount: Record<string, string> = {
+  'fuel': 'Fuel/Mileage Expenses',
+  'maintenance': 'Repairs and Maintenance',
+  'driver_salary': 'Salaries and Employee Wages',
+  'insurance': 'Insurance',
+  'toll': 'Travel Expenses',
+  'loading': 'Cost of Goods Sold',
+  'parking': 'Travel Expenses',
+  'other': 'Miscellaneous Expenses',
+};
+
+async function getExpenseAccountId(
+  accessToken: string,
+  organizationId: string,
+  category?: string
+): Promise<string | null> {
+  // Try to find a matching account based on category
+  const targetAccountName = category ? expenseCategoryToZohoAccount[category] : null;
+
+  // Fetch chart of accounts to find expense accounts
+  const accountsResponse = await fetch(
+    `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}&account_type=expense`,
+    {
+      headers: {
+        'Authorization': `Zoho-oauthtoken ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  const accountsData = await accountsResponse.json();
+
+  if (!accountsData.chartofaccounts || accountsData.chartofaccounts.length === 0) {
+    console.error('No expense accounts found in Zoho');
+    return null;
+  }
+
+  const accounts = accountsData.chartofaccounts;
+
+  // Try to find a matching account by name
+  if (targetAccountName) {
+    const matchingAccount = accounts.find((acc: any) =>
+      acc.account_name.toLowerCase().includes(targetAccountName.toLowerCase()) ||
+      targetAccountName.toLowerCase().includes(acc.account_name.toLowerCase())
+    );
+    if (matchingAccount) {
+      console.log(`Found matching Zoho account for category "${category}":`, matchingAccount.account_name);
+      return matchingAccount.account_id;
+    }
+  }
+
+  // Fallback: Look for common expense account names
+  const fallbackNames = ['Miscellaneous Expenses', 'Other Expenses', 'Operating Expenses', 'General Expenses'];
+  for (const name of fallbackNames) {
+    const fallbackAccount = accounts.find((acc: any) =>
+      acc.account_name.toLowerCase().includes(name.toLowerCase())
+    );
+    if (fallbackAccount) {
+      console.log(`Using fallback Zoho expense account:`, fallbackAccount.account_name);
+      return fallbackAccount.account_id;
+    }
+  }
+
+  // Last resort: use the first expense account available
+  console.log(`Using first available Zoho expense account:`, accounts[0].account_name);
+  return accounts[0].account_id;
+}
+
 async function syncExpenseToZoho(
   accessToken: string,
   organizationId: string,
@@ -150,13 +219,33 @@ async function syncExpenseToZoho(
 ): Promise<string | null> {
   console.log('Syncing expense to Zoho:', expense.description);
 
-  const zohoExpenseData = {
-    account_id: undefined, // Will use default expense account
+  // Get appropriate expense account ID based on category
+  const accountId = await getExpenseAccountId(accessToken, organizationId, expense.category);
+
+  if (!accountId) {
+    console.error('Could not find a valid expense account in Zoho');
+    return null;
+  }
+
+  const zohoExpenseData: Record<string, any> = {
+    account_id: accountId,
     date: expense.expense_date,
     amount: expense.amount,
-    description: expense.description,
-    reference_number: expense.id,
+    description: expense.description || `${expense.category || 'Expense'} - ${expense.expense_date}`,
+    reference_number: expense.id?.substring(0, 50), // Zoho has a limit on reference number length
   };
+
+  // Add vendor if available (for driver salary expenses)
+  if (expense.driver_id) {
+    zohoExpenseData.vendor_name = expense.notes?.includes('Salary payment')
+      ? expense.description?.split(' - ')[1]?.split(' (')[0] || 'Driver'
+      : undefined;
+  }
+
+  // Add notes if available
+  if (expense.notes) {
+    zohoExpenseData.description = `${zohoExpenseData.description}\n${expense.notes}`;
+  }
 
   const createExpenseResponse = await fetch(
     `${ZOHO_BOOKS_URL()}/expenses?organization_id=${organizationId}`,
@@ -171,7 +260,7 @@ async function syncExpenseToZoho(
   );
 
   const expenseResult = await createExpenseResponse.json();
-  
+
   if (expenseResult.expense?.expense_id) {
     console.log('Expense synced to Zoho:', expenseResult.expense.expense_id);
     return expenseResult.expense.expense_id;
