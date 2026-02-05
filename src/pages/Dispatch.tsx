@@ -832,8 +832,8 @@ const DispatchPage = () => {
       subtitle="Create and manage shipment dispatches"
     >
       {/* Actions Bar */}
-      <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-8">
-        <div className="flex gap-4 flex-1">
+      <div className="dispatch-actions-bar flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-8">
+        <div className="dispatch-status-filters flex gap-4 flex-1">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -1183,7 +1183,7 @@ const DispatchPage = () => {
           <p className="text-sm text-muted-foreground/70">Create your first dispatch to get started</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+        <div className="dispatch-list grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {filteredDispatches.map((dispatch, index) => (
             <motion.div
               key={dispatch.id}

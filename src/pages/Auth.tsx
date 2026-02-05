@@ -31,6 +31,7 @@ const Auth = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showEmailConfirmation, setShowEmailConfirmation] = useState(false);
   const [registeredEmail, setRegisteredEmail] = useState("");
+  const [lastSignupAttempt, setLastSignupAttempt] = useState<number>(0);
 
   const [formData, setFormData] = useState({
     fullName: "",
@@ -113,12 +114,36 @@ const Auth = () => {
           return;
         }
 
+        // Rate limit check - prevent rapid signup attempts (60 seconds between attempts)
+        const now = Date.now();
+        const timeSinceLastAttempt = now - lastSignupAttempt;
+        const SIGNUP_COOLDOWN = 60000; // 60 seconds
+
+        if (lastSignupAttempt > 0 && timeSinceLastAttempt < SIGNUP_COOLDOWN) {
+          const remainingSeconds = Math.ceil((SIGNUP_COOLDOWN - timeSinceLastAttempt) / 1000);
+          toast({
+            title: "Please Wait",
+            description: `You can try signing up again in ${remainingSeconds} seconds.`,
+            variant: "destructive",
+          });
+          setLoading(false);
+          return;
+        }
+
+        setLastSignupAttempt(now);
+
         const { error } = await signUp(formData.email, formData.password, formData.fullName);
         if (error) {
           if (error.message.includes("User already registered")) {
             toast({
               title: "Account Exists",
               description: "This email is already registered. Please log in instead.",
+              variant: "destructive",
+            });
+          } else if (error.message.toLowerCase().includes("rate") || error.message.toLowerCase().includes("limit")) {
+            toast({
+              title: "Too Many Attempts",
+              description: "Please wait a few minutes before trying again.",
               variant: "destructive",
             });
           } else {

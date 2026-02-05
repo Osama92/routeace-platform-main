@@ -236,7 +236,7 @@ const Dashboard = () => {
   return (
     <DashboardLayout title="Dashboard" subtitle="Overview of your logistics operations">
       {/* Metrics Grid */}
-      <div className={`grid gap-3 sm:gap-4 mb-6 sm:mb-8 ${
+      <div className={`dashboard-stats-grid grid gap-3 sm:gap-4 mb-6 sm:mb-8 ${
         hideFinancialData
           ? "grid-cols-2 sm:grid-cols-2 lg:grid-cols-4"
           : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"
@@ -247,7 +247,7 @@ const Dashboard = () => {
       </div>
 
       {/* Main Content Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
+      <div className="dashboard-revenue-chart grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
         <div className="xl:col-span-2">
           <DeliveryChart />
         </div>
@@ -258,7 +258,7 @@ const Dashboard = () => {
 
       {/* Bottom Section */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
-        <div className="xl:col-span-2 overflow-x-auto">
+        <div className="dashboard-recent-activity xl:col-span-2 overflow-x-auto">
           <RecentShipments />
         </div>
         <div className="space-y-4 sm:space-y-6">

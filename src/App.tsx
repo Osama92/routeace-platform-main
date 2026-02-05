@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { DispatchNotificationProvider } from "@/contexts/DispatchNotificationContext";
+import { OnboardingProvider } from "@/contexts/OnboardingContext";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import Index from "./pages/Index";
@@ -54,8 +55,9 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <AuthProvider>
-        <DispatchNotificationProvider>
-          <TooltipProvider>
+        <OnboardingProvider>
+          <DispatchNotificationProvider>
+            <TooltipProvider>
             <Toaster />
             <Sonner />
             <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -339,8 +341,9 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           </BrowserRouter>
-        </TooltipProvider>
-      </DispatchNotificationProvider>
+          </TooltipProvider>
+        </DispatchNotificationProvider>
+      </OnboardingProvider>
     </AuthProvider>
   </ThemeProvider>
 </QueryClientProvider>

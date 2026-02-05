@@ -38,12 +38,15 @@ import {
   Image,
   PenTool,
   Trash2,
+  PlayCircle,
+  Sparkles,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import GoogleSheetsIntegration from "@/components/settings/GoogleSheetsIntegration";
 import ApprovalSettings from "@/components/settings/ApprovalSettings";
+import { useOnboarding } from "@/contexts/OnboardingContext";
 
 interface Integration {
   id: string;
@@ -60,6 +63,7 @@ const SettingsPage = () => {
   const [saving, setSaving] = useState<string | null>(null);
   const { toast } = useToast();
   const { hasAnyRole } = useAuth();
+  const { restartTour, state: onboardingState } = useOnboarding();
 
   const isAdmin = hasAnyRole(["admin"]);
 
@@ -377,7 +381,7 @@ const SettingsPage = () => {
         </TabsList>
 
         <TabsContent value="integrations" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="settings-integrations-section grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Zoho Integration */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -1025,6 +1029,56 @@ const SettingsPage = () => {
                   ) : null}
                   Save Signature & Logo
                 </Button>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Product Tour Section */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <Card className="settings-profile-section glass-card">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
+                    <Sparkles className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-lg">Product Tour</CardTitle>
+                    <CardDescription>Learn how to use the platform with an interactive walkthrough</CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
+                  <div>
+                    <p className="font-medium text-foreground">Interactive Tour</p>
+                    <p className="text-sm text-muted-foreground">
+                      {onboardingState.completedAt
+                        ? `Completed on ${onboardingState.completedAt.toLocaleDateString()}`
+                        : "Take a guided tour of the platform's features"}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      restartTour();
+                      toast({
+                        title: "Tour Started",
+                        description: "Follow the highlights to learn about each feature.",
+                      });
+                    }}
+                    className="gap-2"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    {onboardingState.completedAt ? "Restart Tour" : "Start Tour"}
+                  </Button>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  The product tour will guide you through the main features of RouteAce, including dispatch management, invoicing, fleet tracking, and more.
+                </p>
               </CardContent>
             </Card>
           </motion.div>

@@ -1070,7 +1070,7 @@ const InvoicesPage = () => {
       </div>
 
       {/* Actions Bar */}
-      <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-6">
+      <div className="invoices-actions-bar flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-6">
         <div className="flex gap-4 flex-1">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -1546,7 +1546,7 @@ const InvoicesPage = () => {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="glass-card overflow-hidden"
+        className="invoices-list glass-card overflow-hidden"
       >
         <Table>
           <TableHeader>

@@ -102,7 +102,7 @@ const Sidebar = () => {
   const sidebarContent = (
     <>
       {/* Logo */}
-      <div className="flex items-center gap-3 p-5 border-b border-sidebar-border">
+      <div className="sidebar-logo flex items-center gap-3 p-5 border-b border-sidebar-border">
         <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
           <Truck className="w-5 h-5 text-primary-foreground" />
         </div>
@@ -125,7 +125,7 @@ const Sidebar = () => {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto scrollbar-thin">
+      <nav className="sidebar-navigation flex-1 p-4 space-y-1 overflow-y-auto scrollbar-thin">
         {filteredNavigation.map((item) => {
           const isActive = location.pathname === item.href;
           return (
