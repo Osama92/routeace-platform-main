@@ -43,9 +43,10 @@ interface Vehicle {
 }
 
 // Fuel consumption factors by tonnage (L/km)
-const getFuelFactor = (capacityKg: number | null, vehicleType: string): number => {
-  const tonnage = (capacityKg || 0) / 1000;
-  
+// Note: capacity_kg field actually stores tonnage in tons (not kg)
+const getFuelFactor = (capacityTons: number | null, vehicleType: string): number => {
+  const tonnage = capacityTons || 0;
+
   // Based on user requirements:
   // 15-20 tonnes: 0.35 L/km
   // 30 tonnes: 0.47 L/km
@@ -212,7 +213,7 @@ const FuelPlanningCard = ({ dispatchId, distanceKm, vehicleId, pickupAddress, de
     }
   };
 
-  const tonnage = vehicle ? (vehicle.capacity_kg || 0) / 1000 : 0;
+  const tonnage = vehicle ? (vehicle.capacity_kg || 0) : 0;
   const factor = vehicle ? getFuelFactor(vehicle.capacity_kg, vehicle.vehicle_type) : 0.35;
 
   const formatNumber = (num: number) => {

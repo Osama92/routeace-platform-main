@@ -176,13 +176,11 @@ const GoogleSheetsIntegration = () => {
 
     setIsSaving(true);
     try {
-      // Deactivate any existing configs first
-      if (savedConfig?.id) {
-        await supabase
-          .from("google_sheets_configs")
-          .update({ is_active: false })
-          .neq("id", savedConfig.id);
-      }
+      // ALWAYS deactivate ALL existing configs first to avoid duplicates
+      await supabase
+        .from("google_sheets_configs")
+        .update({ is_active: false })
+        .eq("is_active", true);
 
       const configData = {
         name: "Default Google Sheets Connection",
@@ -194,8 +192,8 @@ const GoogleSheetsIntegration = () => {
         is_active: true,
       };
 
-      if (savedConfig?.id) {
-        // Update existing config
+      if (savedConfig?.id && savedConfig.spreadsheet_id === spreadsheetId) {
+        // Update existing config only if it's the same spreadsheet
         const { error } = await supabase
           .from("google_sheets_configs")
           .update(configData)
@@ -203,7 +201,7 @@ const GoogleSheetsIntegration = () => {
 
         if (error) throw error;
       } else {
-        // Insert new config
+        // Insert new config (for new spreadsheet or first time)
         const { data, error } = await supabase
           .from("google_sheets_configs")
           .insert(configData)
@@ -538,7 +536,7 @@ const GoogleSheetsIntegration = () => {
                   )}
                 </p>
                 <div className="flex gap-2">
-                  {!savedConfig && (
+                  {(!savedConfig || savedConfig.spreadsheet_id !== spreadsheetId) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -551,7 +549,7 @@ const GoogleSheetsIntegration = () => {
                       ) : (
                         <Save className="w-3 h-3 mr-1" />
                       )}
-                      Save
+                      {savedConfig ? "Update" : "Save"}
                     </Button>
                   )}
                   <Button

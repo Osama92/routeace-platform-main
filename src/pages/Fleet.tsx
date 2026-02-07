@@ -686,14 +686,15 @@ const FleetPage = () => {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="capacity_kg">Capacity (kg)</Label>
+                      <Label htmlFor="capacity_kg">Capacity (Tons)</Label>
                       <Input
                         id="capacity_kg"
                         name="capacity_kg"
                         type="number"
+                        step="0.01"
                         value={formData.capacity_kg}
                         onChange={handleInputChange}
-                        placeholder="30000"
+                        placeholder="30"
                         className="bg-secondary/50"
                       />
                     </div>
@@ -810,7 +811,7 @@ const FleetPage = () => {
                   {vehicle.capacity_kg && (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Capacity</span>
-                      <span className="text-foreground">{vehicle.capacity_kg.toLocaleString()} kg</span>
+                      <span className="text-foreground">{vehicle.capacity_kg}T</span>
                     </div>
                   )}
                   {vehicle.year && (

@@ -37,7 +37,27 @@ import {
   DollarSign,
   History,
   CalendarRange,
+  Trash2,
+  Eye,
+  FileText,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
@@ -51,6 +71,8 @@ import MultipleDropoffs from "@/components/dispatch/MultipleDropoffs";
 import DispatchMapView from "@/components/dispatch/DispatchMapView";
 import { AddressAutocomplete } from "@/components/shared/AddressAutocomplete";
 import FinancialDetailsForm from "@/components/transactions/FinancialDetailsForm";
+import HistoricalDataView, { HistoricalInvoiceData } from "@/components/dispatch/HistoricalDataView";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface Dropoff {
   id: string;
@@ -214,7 +236,16 @@ const DispatchPage = () => {
   const [statusDropoffs, setStatusDropoffs] = useState<DispatchDropoff[]>([]);
 
   const [dropoffs, setDropoffs] = useState<Dropoff[]>([]);
-  
+
+  // Historical data state
+  const [historicalData, setHistoricalData] = useState<HistoricalInvoiceData | null>(null);
+  const [loadingHistorical, setLoadingHistorical] = useState(false);
+
+  // Delete confirmation state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [dispatchToDelete, setDispatchToDelete] = useState<Dispatch | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   // Edit form state
   const [editFormData, setEditFormData] = useState({
     customer_id: "",
@@ -459,13 +490,14 @@ const DispatchPage = () => {
   const calculateSuggestedFuel = (vehicleId: string, distanceKm: number) => {
     const vehicle = vehicles.find(v => v.id === vehicleId);
     if (!vehicle) return 0;
-    
-    const tonnage = (vehicle.capacity_kg || 0) / 1000;
+
+    // Note: capacity_kg field actually stores tonnage in tons
+    const tonnage = vehicle.capacity_kg || 0;
     let factor = 0.35;
     if (tonnage >= 45) factor = 0.55;
     else if (tonnage >= 25) factor = 0.47;
     else if (tonnage >= 15) factor = 0.35;
-    
+
     return distanceKm * 2 * factor; // To and fro
   };
 
@@ -684,6 +716,67 @@ const DispatchPage = () => {
     }
   };
 
+  // Handle dispatch deletion
+  const handleDeleteDispatch = async () => {
+    if (!dispatchToDelete) return;
+
+    setDeleting(true);
+    try {
+      // First delete related records (dropoffs, etc.)
+      await supabase
+        .from("dispatch_dropoffs")
+        .delete()
+        .eq("dispatch_id", dispatchToDelete.id);
+
+      // If this is a historical dispatch, also delete the linked historical_invoice_data
+      if (dispatchToDelete.is_historical && dispatchToDelete.historical_transaction_id) {
+        await supabase
+          .from("historical_invoice_data")
+          .delete()
+          .eq("id", dispatchToDelete.historical_transaction_id);
+      }
+
+      // Delete the dispatch
+      const { error } = await supabase
+        .from("dispatches")
+        .delete()
+        .eq("id", dispatchToDelete.id);
+
+      if (error) throw error;
+
+      // Log the deletion
+      await logChange({
+        table_name: "dispatches",
+        record_id: dispatchToDelete.id,
+        action: "delete",
+        old_data: {
+          dispatch_number: dispatchToDelete.dispatch_number,
+          customer: dispatchToDelete.customers?.company_name,
+          status: dispatchToDelete.status,
+        },
+        new_data: null,
+      });
+
+      toast({
+        title: "Dispatch Deleted",
+        description: `Dispatch ${dispatchToDelete.dispatch_number} has been deleted successfully.`,
+      });
+
+      setDeleteDialogOpen(false);
+      setDispatchToDelete(null);
+      fetchData();
+    } catch (error: any) {
+      console.error("Error deleting dispatch:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete dispatch",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // Fetch dropoffs for a specific dispatch (full data including status)
   const fetchDispatchDropoffsFull = async (dispatchId: string): Promise<DispatchDropoff[]> => {
     const { data, error } = await supabase
@@ -710,6 +803,30 @@ const DispatchPage = () => {
       latitude: d.latitude,
       longitude: d.longitude,
     }));
+  };
+
+  // Fetch historical invoice data for a dispatch
+  const fetchHistoricalData = async (transactionId: string): Promise<HistoricalInvoiceData | null> => {
+    try {
+      setLoadingHistorical(true);
+      const { data, error } = await supabase
+        .from("historical_invoice_data")
+        .select("*")
+        .eq("id", transactionId)
+        .single();
+
+      if (error) {
+        console.error("Error fetching historical data:", error);
+        return null;
+      }
+
+      return data as HistoricalInvoiceData;
+    } catch (err) {
+      console.error("Error fetching historical data:", err);
+      return null;
+    } finally {
+      setLoadingHistorical(false);
+    }
   };
 
   // Update dropoff status
@@ -1076,14 +1193,15 @@ const DispatchPage = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="cargo_weight_kg">Weight (kg)</Label>
+                    <Label htmlFor="cargo_weight_kg">Tonnage (T)</Label>
                     <Input
                       id="cargo_weight_kg"
                       name="cargo_weight_kg"
                       type="number"
+                      step="0.01"
                       value={formData.cargo_weight_kg}
                       onChange={handleInputChange}
-                      placeholder="e.g., 2500"
+                      placeholder="e.g., 12.75"
                       className="bg-secondary/50"
                     />
                   </div>
@@ -1341,9 +1459,84 @@ const DispatchPage = () => {
                     {dispatch.status.replace("_", " ")}
                   </span>
                 </div>
-                <Button variant="ghost" size="icon">
-                  <MoreVertical className="w-4 h-4" />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon">
+                      <MoreVertical className="w-4 h-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        setSelectedDispatch(dispatch);
+                        const dropoffsData = await fetchDispatchDropoffs(dispatch.id);
+                        setDetailDropoffs(dropoffsData);
+                        if (dispatch.is_historical && dispatch.historical_transaction_id) {
+                          const histData = await fetchHistoricalData(dispatch.historical_transaction_id);
+                          setHistoricalData(histData);
+                        } else {
+                          setHistoricalData(null);
+                        }
+                        setIsDetailDialogOpen(true);
+                      }}
+                    >
+                      <Eye className="w-4 h-4 mr-2" />
+                      View Details
+                    </DropdownMenuItem>
+                    {hasAnyRole(["admin"]) && dispatch.status !== "cancelled" && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setSelectedDispatch(dispatch);
+                          setIsFinancialFormOpen(true);
+                        }}
+                      >
+                        <DollarSign className="w-4 h-4 mr-2" />
+                        Financials
+                      </DropdownMenuItem>
+                    )}
+                    {canManage && dispatch.status !== "delivered" && dispatch.status !== "cancelled" && !dispatch.is_historical && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setSelectedDispatch(dispatch);
+                          setEditFormData({
+                            customer_id: dispatch.customer_id || "",
+                            pickup_address: dispatch.pickup_address || "",
+                            delivery_address: dispatch.delivery_address || "",
+                            cargo_description: dispatch.cargo_description || "",
+                            cargo_weight_kg: dispatch.cargo_weight_kg?.toString() || "",
+                            priority: dispatch.priority || "normal",
+                            scheduled_pickup: dispatch.scheduled_pickup || "",
+                            vehicle_id: dispatch.vehicle_id || "",
+                            driver_id: dispatch.driver_id || "",
+                            distance_km: dispatch.distance_km?.toString() || "",
+                            date_loaded: dispatch.date_loaded || "",
+                            delivery_commenced_at: dispatch.delivery_commenced_at || "",
+                          });
+                          fetchDispatchDropoffs(dispatch.id).then(setEditDropoffs);
+                          setIsEditDialogOpen(true);
+                        }}
+                      >
+                        <Pencil className="w-4 h-4 mr-2" />
+                        Edit
+                      </DropdownMenuItem>
+                    )}
+                    {canManage && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => {
+                            setDispatchToDelete(dispatch);
+                            setDeleteDialogOpen(true);
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Delete
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
 
               {/* Customer */}
@@ -1392,7 +1585,7 @@ const DispatchPage = () => {
                 <div className="flex items-center gap-2">
                   <Package className="w-4 h-4 text-muted-foreground" />
                   <span className="text-sm text-muted-foreground">
-                    {dispatch.cargo_weight_kg ? `${dispatch.cargo_weight_kg} kg` : "—"}
+                    {dispatch.cargo_weight_kg ? `${dispatch.cargo_weight_kg}T` : "—"}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1416,6 +1609,15 @@ const DispatchPage = () => {
                     // Fetch dropoffs for this dispatch
                     const dropoffsData = await fetchDispatchDropoffs(dispatch.id);
                     setDetailDropoffs(dropoffsData);
+
+                    // Fetch historical data if this is a historical dispatch
+                    if (dispatch.is_historical && dispatch.historical_transaction_id) {
+                      const histData = await fetchHistoricalData(dispatch.historical_transaction_id);
+                      setHistoricalData(histData);
+                    } else {
+                      setHistoricalData(null);
+                    }
+
                     setIsDetailDialogOpen(true);
                   }}
                 >
@@ -1613,105 +1815,183 @@ const DispatchPage = () => {
       </Dialog>
 
       {/* Dispatch Detail Dialog with Fuel Planning */}
-      <Dialog open={isDetailDialogOpen} onOpenChange={setIsDetailDialogOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+      <Dialog open={isDetailDialogOpen} onOpenChange={(open) => {
+        setIsDetailDialogOpen(open);
+        if (!open) {
+          setHistoricalData(null);
+        }
+      }}>
+        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="font-heading">
+            <DialogTitle className="font-heading flex items-center gap-2">
               {selectedDispatch?.dispatch_number} | {selectedDispatch?.vehicles?.registration_number || "No Vehicle"} | {selectedDispatch?.pickup_address?.split(",")[0]} → {selectedDispatch?.delivery_address?.split(",")[0]}
+              {selectedDispatch?.is_historical && (
+                <Badge variant="secondary" className="ml-2">
+                  <History className="w-3 h-3 mr-1" />
+                  Historical
+                </Badge>
+              )}
             </DialogTitle>
             <DialogDescription>
-              View dispatch information and fuel planning
+              {selectedDispatch?.is_historical
+                ? "View imported historical dispatch data and all transaction details"
+                : "View dispatch information and fuel planning"}
             </DialogDescription>
           </DialogHeader>
-          
+
           {selectedDispatch && (
-            <div className="grid gap-6 py-4">
-              {/* Dispatch Info */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Customer</p>
-                  <p className="font-medium">{selectedDispatch.customers?.company_name || "—"}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Status</p>
-                  <p className="font-medium capitalize">{selectedDispatch.status?.replace("_", " ")}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Pickup</p>
-                  <p className="text-sm">{selectedDispatch.pickup_address}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Delivery</p>
-                  <p className="text-sm">{selectedDispatch.delivery_address}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Driver</p>
-                  <p className="font-medium">{selectedDispatch.drivers?.full_name || "Unassigned"}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Vehicle</p>
-                  <p className="font-medium">{selectedDispatch.vehicles?.registration_number || "—"}</p>
-                </div>
-                {selectedDispatch.date_loaded && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Date Loaded</p>
-                    <p className="font-medium">{format(new Date(selectedDispatch.date_loaded), "MMM dd, yyyy HH:mm")}</p>
-                  </div>
-                )}
-                {selectedDispatch.delivery_commenced_at && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Delivery Commenced</p>
-                    <p className="font-medium">{format(new Date(selectedDispatch.delivery_commenced_at), "MMM dd, yyyy HH:mm")}</p>
-                  </div>
-                )}
-                {selectedDispatch.date_loaded && selectedDispatch.delivery_commenced_at && (
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Days in Transit</p>
-                    <p className="font-semibold text-info">
-                      {Math.ceil(
-                        (new Date(selectedDispatch.delivery_commenced_at).getTime() - new Date(selectedDispatch.date_loaded).getTime()) /
-                        (1000 * 60 * 60 * 24)
-                      )} day(s)
-                    </p>
-                  </div>
-                )}
-              </div>
+            <>
+              {selectedDispatch.is_historical && historicalData ? (
+                <Tabs defaultValue="historical" className="w-full">
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="historical">All Transaction Data</TabsTrigger>
+                    <TabsTrigger value="dispatch">Dispatch & Map</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="historical" className="mt-4">
+                    <HistoricalDataView data={historicalData} loading={loadingHistorical} />
+                  </TabsContent>
+                  <TabsContent value="dispatch" className="mt-4">
+                    <div className="grid gap-6">
+                      {/* Dispatch Info */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Customer</p>
+                          <p className="font-medium">{selectedDispatch.customers?.company_name || "—"}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Status</p>
+                          <p className="font-medium capitalize">{selectedDispatch.status?.replace("_", " ")}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Pickup</p>
+                          <p className="text-sm">{selectedDispatch.pickup_address}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Delivery</p>
+                          <p className="text-sm">{selectedDispatch.delivery_address}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Driver</p>
+                          <p className="font-medium">{selectedDispatch.drivers?.full_name || "Unassigned"}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-xs text-muted-foreground">Vehicle</p>
+                          <p className="font-medium">{selectedDispatch.vehicles?.registration_number || "—"}</p>
+                        </div>
+                      </div>
 
-              {/* Route Map View */}
-              <DispatchMapView
-                pickup={{
-                  address: selectedDispatch.pickup_address,
-                  type: "pickup",
-                }}
-                delivery={{
-                  address: selectedDispatch.delivery_address,
-                  type: "delivery",
-                }}
-                dropoffs={detailDropoffs.map((d, i) => ({
-                  address: d.address,
-                  latitude: d.latitude || undefined,
-                  longitude: d.longitude || undefined,
-                  type: "dropoff" as const,
-                  label: `Stop ${i + 1}`,
-                }))}
-                mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN}
-              />
+                      {/* Route Map View */}
+                      <DispatchMapView
+                        pickup={{
+                          address: selectedDispatch.pickup_address,
+                          type: "pickup",
+                        }}
+                        delivery={{
+                          address: selectedDispatch.delivery_address,
+                          type: "delivery",
+                        }}
+                        dropoffs={detailDropoffs.map((d, i) => ({
+                          address: d.address,
+                          latitude: d.latitude || undefined,
+                          longitude: d.longitude || undefined,
+                          type: "dropoff" as const,
+                          label: `Stop ${i + 1}`,
+                        }))}
+                        mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN}
+                      />
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              ) : (
+                <div className="grid gap-6 py-4">
+                  {/* Dispatch Info */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Customer</p>
+                      <p className="font-medium">{selectedDispatch.customers?.company_name || "—"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Status</p>
+                      <p className="font-medium capitalize">{selectedDispatch.status?.replace("_", " ")}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Pickup</p>
+                      <p className="text-sm">{selectedDispatch.pickup_address}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Delivery</p>
+                      <p className="text-sm">{selectedDispatch.delivery_address}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Driver</p>
+                      <p className="font-medium">{selectedDispatch.drivers?.full_name || "Unassigned"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Vehicle</p>
+                      <p className="font-medium">{selectedDispatch.vehicles?.registration_number || "—"}</p>
+                    </div>
+                    {selectedDispatch.date_loaded && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Date Loaded</p>
+                        <p className="font-medium">{format(new Date(selectedDispatch.date_loaded), "MMM dd, yyyy HH:mm")}</p>
+                      </div>
+                    )}
+                    {selectedDispatch.delivery_commenced_at && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Delivery Commenced</p>
+                        <p className="font-medium">{format(new Date(selectedDispatch.delivery_commenced_at), "MMM dd, yyyy HH:mm")}</p>
+                      </div>
+                    )}
+                    {selectedDispatch.date_loaded && selectedDispatch.delivery_commenced_at && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Days in Transit</p>
+                        <p className="font-semibold text-info">
+                          {Math.ceil(
+                            (new Date(selectedDispatch.delivery_commenced_at).getTime() - new Date(selectedDispatch.date_loaded).getTime()) /
+                            (1000 * 60 * 60 * 24)
+                          )} day(s)
+                        </p>
+                      </div>
+                    )}
+                  </div>
 
-              {/* Fuel Planning Card */}
-              <FuelPlanningCard
-                dispatchId={selectedDispatch.id}
-                distanceKm={selectedDispatch.distance_km || 0}
-                vehicleId={selectedDispatch.vehicle_id || undefined}
-                pickupAddress={selectedDispatch.pickup_address}
-                deliveryAddress={selectedDispatch.delivery_address}
-                onUpdate={() => fetchData()}
-                onSaveComplete={() => {
-                  setIsDetailDialogOpen(false);
-                  fetchData();
-                }}
-                readOnly={true}
-              />
-            </div>
+                  {/* Route Map View */}
+                  <DispatchMapView
+                    pickup={{
+                      address: selectedDispatch.pickup_address,
+                      type: "pickup",
+                    }}
+                    delivery={{
+                      address: selectedDispatch.delivery_address,
+                      type: "delivery",
+                    }}
+                    dropoffs={detailDropoffs.map((d, i) => ({
+                      address: d.address,
+                      latitude: d.latitude || undefined,
+                      longitude: d.longitude || undefined,
+                      type: "dropoff" as const,
+                      label: `Stop ${i + 1}`,
+                    }))}
+                    mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN}
+                  />
+
+                  {/* Fuel Planning Card */}
+                  <FuelPlanningCard
+                    dispatchId={selectedDispatch.id}
+                    distanceKm={selectedDispatch.distance_km || 0}
+                    vehicleId={selectedDispatch.vehicle_id || undefined}
+                    pickupAddress={selectedDispatch.pickup_address}
+                    deliveryAddress={selectedDispatch.delivery_address}
+                    onUpdate={() => fetchData()}
+                    onSaveComplete={() => {
+                      setIsDetailDialogOpen(false);
+                      fetchData();
+                    }}
+                    readOnly={true}
+                  />
+                </div>
+              )}
+            </>
           )}
 
           <DialogFooter>
@@ -1772,14 +2052,15 @@ const DispatchPage = () => {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit_cargo_weight_kg">Weight (kg)</Label>
+                <Label htmlFor="edit_cargo_weight_kg">Tonnage (T)</Label>
                 <Input
                   id="edit_cargo_weight_kg"
                   name="cargo_weight_kg"
                   type="number"
+                  step="0.01"
                   value={editFormData.cargo_weight_kg}
                   onChange={handleEditInputChange}
-                  placeholder="e.g., 2500"
+                  placeholder="e.g., 12.75"
                   className="bg-secondary/50"
                 />
               </div>
@@ -1974,6 +2255,40 @@ const DispatchPage = () => {
           fetchData();
         }}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Dispatch</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete dispatch{" "}
+              <span className="font-semibold text-foreground">
+                {dispatchToDelete?.dispatch_number}
+              </span>
+              ?
+              {dispatchToDelete?.is_historical && (
+                <span className="block mt-2 text-warning">
+                  This is a historical dispatch. Deleting it will also remove the linked transaction data.
+                </span>
+              )}
+              <span className="block mt-2">
+                This action cannot be undone.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteDispatch}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 };

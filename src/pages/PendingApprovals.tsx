@@ -404,7 +404,7 @@ const PendingApprovalsPage = () => {
                               <span>{vehicle.make} {vehicle.model}</span>
                             )}
                             {vehicle.capacity_kg && (
-                              <span>Capacity: {(vehicle.capacity_kg / 1000).toFixed(1)}T</span>
+                              <span>Capacity: {vehicle.capacity_kg}T</span>
                             )}
                           </div>
                           <p className="text-xs text-muted-foreground">

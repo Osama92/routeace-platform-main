@@ -57,23 +57,50 @@ async function getGoogleAccessToken(): Promise<string> {
 
 // Get sheet data
 async function getSheetData(accessToken: string, spreadsheetId: string, sheetName: string): Promise<any[][]> {
-  // Use single quotes around sheet name to handle spaces and special characters
-  // Extended range to BZ (78 columns) to support 50+ fields
-  const range = encodeURIComponent(`'${sheetName}'!A:BZ`);
-  const response = await fetch(
-    `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${range}`,
-    {
-      headers: { 'Authorization': `Bearer ${accessToken}` },
-    }
-  );
+  // For sheet names with spaces/special chars, we need to:
+  // 1. Wrap in single quotes for the range notation
+  // 2. URL-encode the entire range string properly
+  // The key is to encode the quotes as part of the range
+  const rangeNotation = `'${sheetName}'!A:BZ`;
+
+  // Use encodeURIComponent but be careful - Google Sheets API sometimes has issues
+  // Try using the range as a query parameter instead of path parameter
+  const url = new URL(`${GOOGLE_SHEETS_API}/${spreadsheetId}/values:batchGet`);
+  url.searchParams.append('ranges', rangeNotation);
+
+  const response = await fetch(url.toString(), {
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Failed to read sheet: ${errorText}`);
+    // If batchGet fails, try the direct path approach with different encoding
+    console.log('batchGet failed, trying direct path approach...', errorText);
+
+    // Try without quotes if the sheet name has no special chars that require them
+    const directRange = sheetName.includes(' ') || sheetName.includes("'")
+      ? encodeURIComponent(`'${sheetName}'!A:BZ`)
+      : encodeURIComponent(`${sheetName}!A:BZ`);
+
+    const directResponse = await fetch(
+      `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${directRange}`,
+      {
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+      }
+    );
+
+    if (!directResponse.ok) {
+      const directErrorText = await directResponse.text();
+      throw new Error(`Failed to read sheet: ${directErrorText}`);
+    }
+
+    const directData = await directResponse.json();
+    return directData.values || [];
   }
 
   const data = await response.json();
-  return data.values || [];
+  // batchGet returns valueRanges array
+  return data.valueRanges?.[0]?.values || [];
 }
 
 // Update sheet data
@@ -102,6 +129,37 @@ async function updateSheetData(
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Failed to update sheet: ${errorText}`);
+  }
+}
+
+// Update a specific column for multiple rows (for status updates)
+async function updateColumnValues(
+  accessToken: string,
+  spreadsheetId: string,
+  sheetName: string,
+  column: string,
+  startRow: number,
+  values: string[]
+): Promise<void> {
+  // Use single quotes around sheet name to handle spaces and special characters
+  const range = encodeURIComponent(`'${sheetName}'!${column}${startRow}:${column}${startRow + values.length - 1}`);
+
+  const response = await fetch(
+    `${GOOGLE_SHEETS_API}/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ values: values.map(v => [v]) }),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`Failed to update column ${column}:`, errorText);
+    // Don't throw - status update failure shouldn't fail the import
   }
 }
 
@@ -570,8 +628,18 @@ async function createHistoricalDispatch(
   transactionId: string,
   transactionData: any,
   rowIndex: number
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; details?: any }> {
   try {
+    console.log(`[createHistoricalDispatch] Processing row ${rowIndex}, transactionId: ${transactionId}`);
+    console.log(`[createHistoricalDispatch] Input data:`, {
+      customer_name: transactionData.customer_name,
+      driver_name: transactionData.driver_name,
+      truck_number: transactionData.truck_number,
+      pickup: transactionData.pickup_location || transactionData.pick_off,
+      dropoff: transactionData.delivery_location || transactionData.drop_point,
+      transaction_date: transactionData.transaction_date
+    });
+
     // Check if dispatch already exists for this transaction
     const { data: existingDispatch } = await supabase
       .from('dispatches')
@@ -580,14 +648,70 @@ async function createHistoricalDispatch(
       .single();
 
     if (existingDispatch) {
-      // Dispatch already exists, skip
-      return { success: true };
+      console.log(`[createHistoricalDispatch] Dispatch already exists for transaction ${transactionId}, skipping`);
+      return { success: true, details: { skipped: true, existingDispatchId: existingDispatch.id } };
     }
 
     // Lookup related entities by name
-    const customer = await lookupCustomerByName(supabase, transactionData.customer_name);
+    console.log(`[createHistoricalDispatch] Looking up customer: "${transactionData.customer_name}"`);
+    let customer = await lookupCustomerByName(supabase, transactionData.customer_name);
+    console.log(`[createHistoricalDispatch] Customer lookup result:`, customer);
+    let customerAutoCreated = false;
+
+    // If customer not found, auto-create it
+    if (!customer?.id && transactionData.customer_name) {
+      console.log(`[createHistoricalDispatch] Customer not found, auto-creating: "${transactionData.customer_name}"`);
+      const { data: newCustomer, error: createError } = await supabase
+        .from('customers')
+        .insert({
+          company_name: transactionData.customer_name.trim(),
+          status: 'active',
+          notes: 'Auto-created from Google Sheets import'
+        })
+        .select('id')
+        .single();
+
+      if (createError) {
+        console.error(`[createHistoricalDispatch] Failed to create customer:`, createError);
+        return {
+          success: false,
+          error: `Failed to create customer "${transactionData.customer_name}": ${createError.message}`,
+          details: {
+            skipped: true,
+            reason: 'customer_creation_failed',
+            customerName: transactionData.customer_name,
+            errorDetails: createError
+          }
+        };
+      }
+
+      customer = newCustomer;
+      customerAutoCreated = true;
+      console.log(`[createHistoricalDispatch] Auto-created customer with ID:`, customer?.id);
+    }
+
+    // customer_id is required in dispatches table - skip if still not available
+    if (!customer?.id) {
+      console.log(`[createHistoricalDispatch] No customer available for "${transactionData.customer_name}", skipping dispatch creation`);
+      return {
+        success: false,
+        error: `No customer available for "${transactionData.customer_name}"`,
+        details: {
+          skipped: true,
+          reason: 'customer_not_found',
+          customerName: transactionData.customer_name,
+          hint: 'Customer name may be empty or invalid'
+        }
+      };
+    }
+
+    console.log(`[createHistoricalDispatch] Looking up driver: "${transactionData.driver_name}"`);
     const driver = await lookupDriverByName(supabase, transactionData.driver_name);
+    console.log(`[createHistoricalDispatch] Driver lookup result:`, driver);
+
+    console.log(`[createHistoricalDispatch] Looking up vehicle: "${transactionData.truck_number}"`);
     const vehicle = await lookupVehicleByRegistration(supabase, transactionData.truck_number);
+    console.log(`[createHistoricalDispatch] Vehicle lookup result:`, vehicle);
 
     // Generate dispatch number
     const dateStr = transactionData.transaction_date
@@ -598,7 +722,7 @@ async function createHistoricalDispatch(
     // Create the historical dispatch
     const dispatchData = {
       dispatch_number: dispatchNumber,
-      customer_id: customer?.id || null,
+      customer_id: customer.id,
       driver_id: driver?.id || null,
       vehicle_id: vehicle?.id || null,
       pickup_address: transactionData.pickup_location || transactionData.pick_off || 'N/A',
@@ -614,19 +738,43 @@ async function createHistoricalDispatch(
       notes: `Imported from Google Sheets${transactionData.invoice_number ? ` - Invoice: ${transactionData.invoice_number}` : ''}${transactionData.waybill_number ? ` - Waybill: ${transactionData.waybill_number}` : ''}`,
     };
 
-    const { error: dispatchError } = await supabase
+    console.log(`[createHistoricalDispatch] Inserting dispatch:`, dispatchData);
+
+    const { data: insertedDispatch, error: dispatchError } = await supabase
       .from('dispatches')
-      .insert(dispatchData);
+      .insert(dispatchData)
+      .select('id')
+      .single();
 
     if (dispatchError) {
-      console.error('Failed to create historical dispatch:', dispatchError);
-      return { success: false, error: dispatchError.message };
+      console.error('[createHistoricalDispatch] Failed to create dispatch:', dispatchError);
+      return {
+        success: false,
+        error: dispatchError.message,
+        details: {
+          dispatchData,
+          errorCode: dispatchError.code,
+          errorDetails: dispatchError.details
+        }
+      };
     }
 
-    return { success: true };
+    console.log(`[createHistoricalDispatch] Successfully created dispatch:`, insertedDispatch?.id);
+    return {
+      success: true,
+      details: {
+        dispatchId: insertedDispatch?.id,
+        dispatchNumber,
+        linkedCustomer: !!customer,
+        linkedDriver: !!driver,
+        linkedVehicle: !!vehicle,
+        customerAutoCreated,
+        customerName: customerAutoCreated ? transactionData.customer_name : undefined
+      }
+    };
   } catch (err: any) {
-    console.error('Error creating historical dispatch:', err);
-    return { success: false, error: err.message };
+    console.error('[createHistoricalDispatch] Exception:', err);
+    return { success: false, error: err.message, details: { exception: true } };
   }
 }
 
@@ -728,9 +876,37 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
 
   let imported = 0;
   let skipped = 0;
+  let duplicatesSkipped = 0;
   let dispatchesCreated = 0;
+  let dispatchesSkipped = 0;
+  let customersAutoCreated = 0;
   const errors: string[] = [];
   const skipReasons: string[] = [];
+  const duplicateReasons: string[] = [];
+  const missingCustomers: string[] = [];
+  const autoCreatedCustomerNames: string[] = [];
+
+  // Track import status for each row to write back to Google Sheet
+  // Format: { rowIndex: number, status: string, message: string }
+  const rowStatuses: { rowIndex: number; status: string; message: string }[] = [];
+
+  // Helper to convert column number to letter (1=A, 2=B, ..., 27=AA, etc.)
+  const colNumToLetter = (num: number): string => {
+    let result = '';
+    while (num > 0) {
+      num--;
+      result = String.fromCharCode(65 + (num % 26)) + result;
+      num = Math.floor(num / 26);
+    }
+    return result;
+  };
+
+  // Dynamically determine status columns - place them right after the last header
+  // This ensures they're visible next to your data, not way out at column CA
+  const lastHeaderCol = headers.length; // Number of columns with headers
+  const STATUS_COLUMN = colNumToLetter(lastHeaderCol + 1); // Column right after headers
+  const MESSAGE_COLUMN = colNumToLetter(lastHeaderCol + 2); // Column after status
+  console.log(`[importTransactions] Status columns: ${STATUS_COLUMN} (status), ${MESSAGE_COLUMN} (message). Headers count: ${lastHeaderCol}`);
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i];
@@ -758,6 +934,7 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
         if (skipReasons.length < 5) {
           skipReasons.push(`Row ${i + 2}: customerName=${customerName} (empty row)`);
         }
+        rowStatuses.push({ rowIndex: i, status: 'SKIPPED', message: 'Empty row - no customer name' });
         skipped++;
         continue;
       }
@@ -868,6 +1045,40 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
         console.log('First row transaction data:', JSON.stringify(transactionData, null, 2));
       }
 
+      // Check for duplicate before inserting
+      // Use combination of: customer_name + transaction_date + invoice_number (primary)
+      // Or: customer_name + transaction_date + pickup + dropoff (fallback if no invoice)
+      let duplicateQuery = supabase
+        .from('historical_invoice_data')
+        .select('id')
+        .eq('customer_name', transactionData.customer_name);
+
+      if (transactionData.transaction_date) {
+        duplicateQuery = duplicateQuery.eq('transaction_date', transactionData.transaction_date);
+      }
+
+      if (transactionData.invoice_number) {
+        // Primary duplicate check: customer + date + invoice number
+        duplicateQuery = duplicateQuery.eq('invoice_number', transactionData.invoice_number);
+      } else if (transactionData.pickup_location || transactionData.pick_off) {
+        // Fallback: customer + date + pickup + dropoff
+        const pickup = transactionData.pickup_location || transactionData.pick_off;
+        const dropoff = transactionData.delivery_location || transactionData.drop_point;
+        if (pickup) duplicateQuery = duplicateQuery.eq('pickup_location', pickup);
+        if (dropoff) duplicateQuery = duplicateQuery.eq('delivery_location', dropoff);
+      }
+
+      const { data: existingRecord } = await duplicateQuery.limit(1).single();
+
+      if (existingRecord) {
+        duplicatesSkipped++;
+        if (duplicateReasons.length < 10) {
+          duplicateReasons.push(`Row ${i + 2}: ${transactionData.customer_name} - ${transactionData.transaction_date || 'no date'} - ${transactionData.invoice_number || 'no invoice'}`);
+        }
+        rowStatuses.push({ rowIndex: i, status: 'DUPLICATE', message: 'Already imported' });
+        continue; // Skip this row, it's a duplicate
+      }
+
       // Insert transaction and get the ID back
       const { data: insertedData, error } = await supabase
         .from('historical_invoice_data')
@@ -890,8 +1101,28 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
         );
         if (dispatchResult.success) {
           dispatchesCreated++;
+          // Track auto-created customers
+          if (dispatchResult.details?.customerAutoCreated) {
+            customersAutoCreated++;
+            const custName = dispatchResult.details?.customerName;
+            if (custName && !autoCreatedCustomerNames.includes(custName)) {
+              autoCreatedCustomerNames.push(custName);
+            }
+            rowStatuses.push({ rowIndex: i, status: 'SUCCESS', message: `Imported + Customer "${custName}" auto-created` });
+          } else {
+            rowStatuses.push({ rowIndex: i, status: 'SUCCESS', message: 'Imported successfully' });
+          }
         } else {
-          console.warn(`Row ${i + 2}: Transaction imported but dispatch creation failed: ${dispatchResult.error}`);
+          dispatchesSkipped++;
+          // Track missing customers for the report
+          if (dispatchResult.details?.reason === 'customer_not_found' && missingCustomers.length < 20) {
+            const custName = dispatchResult.details?.customerName || transactionData.customer_name;
+            if (custName && !missingCustomers.includes(custName)) {
+              missingCustomers.push(custName);
+            }
+          }
+          rowStatuses.push({ rowIndex: i, status: 'PARTIAL', message: `Data imported but dispatch failed: ${dispatchResult.error}` });
+          console.warn(`Row ${i + 2}: Transaction imported but dispatch creation skipped: ${dispatchResult.error}`);
         }
       }
 
@@ -899,6 +1130,7 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
     } catch (err: any) {
       const errorMsg = err.message || err.details || JSON.stringify(err);
       errors.push(`Row ${i + 2}: ${errorMsg}`);
+      rowStatuses.push({ rowIndex: i, status: 'ERROR', message: errorMsg });
       skipped++;
     }
   }
@@ -915,6 +1147,53 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
       date: getVal(row, 'date', 'transaction date'),
       raw_first_10_cells: row?.slice(0, 10)
     };
+  }
+
+  // Write import status back to Google Sheet
+  // First, add headers for status columns if not present
+  let statusWriteResult = { success: false, message: '' };
+  try {
+    // Calculate the actual row numbers in the sheet (headerRowIndex + 1 for header, then +1 for each data row)
+    const dataStartRow = headerRowIndex + 2; // +1 for 0-index, +1 for header row itself
+
+    console.log(`[importTransactions] Writing status to sheet. HeaderRowIndex: ${headerRowIndex}, DataStartRow: ${dataStartRow}, DataRows: ${dataRows.length}, Statuses tracked: ${rowStatuses.length}`);
+
+    // Prepare status and message arrays aligned to row positions
+    const statusValues: string[] = [];
+    const messageValues: string[] = [];
+
+    // First add header row values for status columns
+    // We need to write status for each data row
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowStatus = rowStatuses.find(rs => rs.rowIndex === i);
+      if (rowStatus) {
+        statusValues.push(rowStatus.status);
+        messageValues.push(rowStatus.message);
+      } else {
+        statusValues.push(''); // No status recorded for this row
+        messageValues.push('');
+      }
+    }
+
+    console.log(`[importTransactions] Prepared ${statusValues.length} status values. Sample: ${statusValues.slice(0, 3).join(', ')}`);
+
+    // Write status header first (one row before data)
+    console.log(`[importTransactions] Writing header to ${STATUS_COLUMN}${headerRowIndex + 1} and ${MESSAGE_COLUMN}${headerRowIndex + 1}`);
+    await updateColumnValues(accessToken, config.spreadsheet_id, config.sheet_name, STATUS_COLUMN, headerRowIndex + 1, ['Import Status']);
+    await updateColumnValues(accessToken, config.spreadsheet_id, config.sheet_name, MESSAGE_COLUMN, headerRowIndex + 1, ['Import Message']);
+
+    // Write status values for each data row
+    if (statusValues.length > 0) {
+      console.log(`[importTransactions] Writing status values to ${STATUS_COLUMN}${dataStartRow}:${STATUS_COLUMN}${dataStartRow + statusValues.length - 1}`);
+      await updateColumnValues(accessToken, config.spreadsheet_id, config.sheet_name, STATUS_COLUMN, dataStartRow, statusValues);
+      await updateColumnValues(accessToken, config.spreadsheet_id, config.sheet_name, MESSAGE_COLUMN, dataStartRow, messageValues);
+    }
+
+    statusWriteResult = { success: true, message: `Status written to columns ${STATUS_COLUMN} and ${MESSAGE_COLUMN}` };
+    console.log(`[importTransactions] Status write completed successfully`);
+  } catch (statusErr: any) {
+    console.error('[importTransactions] Failed to write status to Google Sheet:', statusErr);
+    statusWriteResult = { success: false, message: statusErr.message || 'Failed to write status' };
   }
 
   // Verify data was actually inserted by querying the count
@@ -938,8 +1217,15 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
   return {
     imported,
     skipped,
+    duplicatesSkipped,
     dispatchesCreated,
+    dispatchesSkipped,
+    customersAutoCreated,
     errors: errors.slice(0, 10), // Limit errors to first 10
+    missingCustomers: missingCustomers.length > 0 ? missingCustomers : undefined,
+    autoCreatedCustomers: autoCreatedCustomerNames.length > 0 ? autoCreatedCustomerNames : undefined,
+    duplicatesSample: duplicateReasons.length > 0 ? duplicateReasons : undefined,
+    statusUpdate: statusWriteResult,
     debug: {
       totalRows: rows.length,
       headerRowIndex: headerRowIndex,
@@ -948,9 +1234,19 @@ async function importTransactions(supabase: any, accessToken: string, config: Sh
       skipReasons: skipReasons,
       sheetName: config.sheet_name,
       firstRowSample: firstRowSample,
+      statusColumns: `${STATUS_COLUMN} (Import Status), ${MESSAGE_COLUMN} (Import Message)`,
       // Add error summary to debug for visibility
       errorCount: errors.length,
-      firstError: errors[0] || 'No errors'
+      firstError: errors[0] || 'No errors',
+      duplicateNote: duplicatesSkipped > 0
+        ? `${duplicatesSkipped} rows were skipped because they already exist in the database.`
+        : undefined,
+      dispatchNote: dispatchesSkipped > 0
+        ? `${dispatchesSkipped} dispatches were not created because their customers don't exist in the system or have empty names.`
+        : undefined,
+      autoCreateNote: customersAutoCreated > 0
+        ? `${customersAutoCreated} customers were auto-created during import.`
+        : undefined
     },
     verification: {
       totalRecordsInTable: totalCount,
@@ -1281,7 +1577,156 @@ serve(async (req) => {
         result = { ...result, ...(await appendTransaction(supabase, accessToken, config)) };
         break;
 
-      case 'test_connection':
+      case 'preview_sheet': {
+        // Preview sheet data without importing - helps debug what's in the sheet
+        console.log('[preview_sheet] Fetching sheet data for preview...');
+        const previewRows = await getSheetData(accessToken, config.spreadsheet_id, config.sheet_name);
+
+        // Find header row
+        let headerRowIndex = -1;
+        const headerKeywords = ['customer name', 'customer', 'year', 'month', 'transaction type', 'date'];
+
+        for (let i = 0; i < Math.min(previewRows.length, 20); i++) {
+          const row = previewRows[i] || [];
+          if (row.length === 0 || row.every((cell: any) => !cell || String(cell).trim() === '')) {
+            continue;
+          }
+          const rowLower = row.map((cell: any) => String(cell || '').toLowerCase().trim());
+          const matchCount = headerKeywords.filter(keyword => rowLower.includes(keyword)).length;
+          if (matchCount >= 2) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+
+        const headers = headerRowIndex >= 0 ? previewRows[headerRowIndex] : [];
+        const dataStartIndex = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+        const sampleDataRows = previewRows.slice(dataStartIndex, dataStartIndex + 5);
+
+        result = {
+          success: true,
+          preview: {
+            totalRows: previewRows.length,
+            headerRowIndex: headerRowIndex,
+            headers: headers?.slice(0, 20), // First 20 headers
+            headerCount: headers?.length || 0,
+            dataRowsCount: previewRows.length - dataStartIndex,
+            sampleRows: sampleDataRows.map((row: any[], idx: number) => ({
+              rowNumber: dataStartIndex + idx + 1,
+              cells: row?.slice(0, 15)?.map((cell: any) => String(cell || '').substring(0, 50))
+            })),
+            rawFirst5Rows: previewRows.slice(0, 5).map((row: any[], idx: number) => ({
+              rowNumber: idx + 1,
+              firstCells: row?.slice(0, 10)?.map((cell: any) => String(cell || '').substring(0, 30))
+            }))
+          }
+        };
+        break;
+      }
+
+      case 'diagnose_imports': {
+        // Diagnose why historical dispatches may not be showing
+        console.log('[diagnose_imports] Running diagnostic checks...');
+
+        // Check historical_invoice_data count
+        const { count: transactionCount, error: txErr } = await supabase
+          .from('historical_invoice_data')
+          .select('*', { count: 'exact', head: true });
+
+        // Check dispatches with is_historical = true
+        const { data: historicalDispatches, count: historicalCount, error: dispErr } = await supabase
+          .from('dispatches')
+          .select('id, dispatch_number, customer_id, driver_id, vehicle_id, status, is_historical, import_source, created_at', { count: 'exact' })
+          .eq('is_historical', true)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        // Check all dispatches count
+        const { count: totalDispatchCount } = await supabase
+          .from('dispatches')
+          .select('*', { count: 'exact', head: true });
+
+        // Get sample of transactions that should have dispatches
+        const { data: sampleTransactions } = await supabase
+          .from('historical_invoice_data')
+          .select('id, customer_name, driver_name, truck_number, transaction_date, period_year, period_month')
+          .order('imported_at', { ascending: false })
+          .limit(5);
+
+        // Check if dispatches exist for these transactions
+        const transactionDispatchStatus = [];
+        for (const tx of sampleTransactions || []) {
+          const { data: linkedDispatch } = await supabase
+            .from('dispatches')
+            .select('id, dispatch_number')
+            .eq('historical_transaction_id', tx.id)
+            .single();
+
+          transactionDispatchStatus.push({
+            transaction_id: tx.id,
+            customer_name: tx.customer_name,
+            driver_name: tx.driver_name,
+            truck_number: tx.truck_number,
+            has_linked_dispatch: !!linkedDispatch,
+            dispatch_id: linkedDispatch?.id || null,
+            dispatch_number: linkedDispatch?.dispatch_number || null
+          });
+        }
+
+        // Check customer/driver/vehicle counts for matching
+        const { count: customerCount } = await supabase
+          .from('customers')
+          .select('*', { count: 'exact', head: true });
+
+        const { count: driverCount } = await supabase
+          .from('drivers')
+          .select('*', { count: 'exact', head: true });
+
+        const { count: vehicleCount } = await supabase
+          .from('vehicles')
+          .select('*', { count: 'exact', head: true });
+
+        result = {
+          success: true,
+          diagnosis: {
+            transactions: {
+              totalCount: transactionCount || 0,
+              error: txErr?.message || null
+            },
+            dispatches: {
+              totalCount: totalDispatchCount || 0,
+              historicalCount: historicalCount || 0,
+              error: dispErr?.message || null,
+              recentHistorical: historicalDispatches || []
+            },
+            entityCounts: {
+              customers: customerCount || 0,
+              drivers: driverCount || 0,
+              vehicles: vehicleCount || 0
+            },
+            transactionDispatchLinking: transactionDispatchStatus,
+            recommendations: []
+          }
+        };
+
+        // Add recommendations based on findings
+        const recs = result.diagnosis.recommendations;
+        if (transactionCount === 0) {
+          recs.push('No transactions found in historical_invoice_data. Import transactions first.');
+        }
+        if (transactionCount > 0 && historicalCount === 0) {
+          recs.push('Transactions exist but no historical dispatches. Check createHistoricalDispatch function logs.');
+        }
+        if (customerCount === 0) {
+          recs.push('No customers in database. Import/create customers first so dispatches can be linked.');
+        }
+        if (historicalCount > 0 && historicalCount < transactionCount) {
+          recs.push(`Only ${historicalCount} of ${transactionCount} transactions have dispatches. Some may have failed to create.`);
+        }
+        break;
+      }
+
+      case 'test_connection': {
         // Test connection by fetching spreadsheet metadata (doesn't require specific sheet)
         const metaResponse = await fetch(
           `${GOOGLE_SHEETS_API}/${config.spreadsheet_id}?fields=properties.title,sheets.properties.title`,
@@ -1301,6 +1746,7 @@ serve(async (req) => {
         result.spreadsheet_title = metaData.properties?.title;
         result.available_sheets = sheetNames;
         break;
+      }
 
       default:
         throw new Error(`Unknown action: ${action}`);

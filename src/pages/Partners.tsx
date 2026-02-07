@@ -88,11 +88,24 @@ const Partners = () => {
   const { user, hasAnyRole } = useAuth();
   const { logChange } = useAuditLog();
 
-  // Edit form data for view/edit dialog
+  // Edit form data for view/edit dialog (all fields)
   const [editFormData, setEditFormData] = useState({
+    company_name: "",
+    partner_type: "",
+    cac_number: "",
+    tin_number: "",
+    director_name: "",
+    director_phone: "",
     contact_name: "",
     contact_email: "",
     contact_phone: "",
+    address: "",
+    city: "",
+    state: "",
+    bank_name: "",
+    bank_account_number: "",
+    bank_account_name: "",
+    notes: "",
     is_active: true,
   });
 
@@ -230,15 +243,28 @@ const Partners = () => {
   const handleViewPartner = (partner: Partner) => {
     setSelectedPartner(partner);
     setEditFormData({
+      company_name: partner.company_name || "",
+      partner_type: partner.partner_type || "",
+      cac_number: partner.cac_number || "",
+      tin_number: partner.tin_number || "",
+      director_name: partner.director_name || "",
+      director_phone: partner.director_phone || "",
       contact_name: partner.contact_name || "",
       contact_email: partner.contact_email || "",
       contact_phone: partner.contact_phone || "",
+      address: partner.address || "",
+      city: partner.city || "",
+      state: partner.state || "",
+      bank_name: partner.bank_name || "",
+      bank_account_number: partner.bank_account_number || "",
+      bank_account_name: partner.bank_account_name || "",
+      notes: partner.notes || "",
       is_active: partner.is_active !== false, // Default to true if not set
     });
     setIsViewDialogOpen(true);
   };
 
-  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setEditFormData((prev) => ({ ...prev, [name]: value }));
   };
@@ -246,10 +272,10 @@ const Partners = () => {
   const handleUpdatePartner = async () => {
     if (!selectedPartner) return;
 
-    if (!editFormData.contact_email || !editFormData.contact_phone) {
+    if (!editFormData.company_name || !editFormData.partner_type || !editFormData.contact_name || !editFormData.contact_email || !editFormData.contact_phone) {
       toast({
         title: "Validation Error",
-        description: "Contact email and phone are required",
+        description: "Company name, partner type, contact name, email and phone are required",
         variant: "destructive",
       });
       return;
@@ -258,9 +284,22 @@ const Partners = () => {
     setSaving(true);
     try {
       const updateData = {
+        company_name: editFormData.company_name,
+        partner_type: editFormData.partner_type,
+        cac_number: editFormData.cac_number || null,
+        tin_number: editFormData.tin_number || null,
+        director_name: editFormData.director_name || null,
+        director_phone: editFormData.director_phone || null,
         contact_name: editFormData.contact_name,
         contact_email: editFormData.contact_email,
         contact_phone: editFormData.contact_phone,
+        address: editFormData.address || null,
+        city: editFormData.city || null,
+        state: editFormData.state || null,
+        bank_name: editFormData.bank_name || null,
+        bank_account_number: editFormData.bank_account_number || null,
+        bank_account_name: editFormData.bank_account_name || null,
+        notes: editFormData.notes || null,
         is_active: editFormData.is_active,
       };
 
@@ -277,9 +316,22 @@ const Partners = () => {
         record_id: selectedPartner.id,
         action: "update",
         old_data: {
+          company_name: selectedPartner.company_name,
+          partner_type: selectedPartner.partner_type,
+          cac_number: selectedPartner.cac_number,
+          tin_number: selectedPartner.tin_number,
+          director_name: selectedPartner.director_name,
+          director_phone: selectedPartner.director_phone,
           contact_name: selectedPartner.contact_name,
           contact_email: selectedPartner.contact_email,
           contact_phone: selectedPartner.contact_phone,
+          address: selectedPartner.address,
+          city: selectedPartner.city,
+          state: selectedPartner.state,
+          bank_name: selectedPartner.bank_name,
+          bank_account_number: selectedPartner.bank_account_number,
+          bank_account_name: selectedPartner.bank_account_name,
+          notes: selectedPartner.notes,
           is_active: selectedPartner.is_active,
         },
         new_data: updateData,
@@ -733,117 +785,308 @@ const Partners = () => {
 
       {/* View/Edit Partner Dialog */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="font-heading flex items-center gap-2">
               <Edit2 className="w-5 h-5" />
-              Partner Details
+              Edit Partner/Vendor
             </DialogTitle>
             <DialogDescription>
-              View and edit partner contact information
+              Update partner information across all sections
             </DialogDescription>
           </DialogHeader>
 
           {selectedPartner && (
-            <div className="space-y-6 mt-4">
-              {/* Company Info (read-only) */}
-              <div className="p-4 bg-secondary/30 rounded-lg">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center">
-                    {getTypeIcon(selectedPartner.partner_type)}
+            <Tabs defaultValue="business" className="mt-4">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="business">Business</TabsTrigger>
+                <TabsTrigger value="director">Director/Contact</TabsTrigger>
+                <TabsTrigger value="banking">Banking</TabsTrigger>
+                <TabsTrigger value="status">Status</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="business" className="space-y-4 mt-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_company_name">Company Name *</Label>
+                    <Input
+                      id="edit_company_name"
+                      name="company_name"
+                      value={editFormData.company_name}
+                      onChange={handleEditInputChange}
+                      placeholder="XYZ Logistics Ltd"
+                      className="bg-secondary/50"
+                    />
                   </div>
-                  <div>
-                    <h4 className="font-semibold text-foreground">{selectedPartner.company_name}</h4>
-                    <span className={`status-badge ${getTypeBadge(selectedPartner.partner_type)} text-xs`}>
-                      {selectedPartner.partner_type.toUpperCase()}
-                    </span>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_partner_type">Partner Type *</Label>
+                    <Select
+                      value={editFormData.partner_type}
+                      onValueChange={(value) => setEditFormData(prev => ({ ...prev, partner_type: value }))}
+                    >
+                      <SelectTrigger className="bg-secondary/50">
+                        <SelectValue placeholder="Select type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="transporter">Transporter</SelectItem>
+                        <SelectItem value="vendor">Vendor</SelectItem>
+                        <SelectItem value="3pl">3PL Partner</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
-                {selectedPartner.address && (
-                  <p className="text-sm text-muted-foreground flex items-center gap-2">
-                    <MapPin className="w-4 h-4" />
-                    {selectedPartner.address}{selectedPartner.city && `, ${selectedPartner.city}`}{selectedPartner.state && `, ${selectedPartner.state}`}
-                  </p>
-                )}
-              </div>
-
-              {/* Editable Contact Fields */}
-              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_cac_number">CAC Number</Label>
+                    <div className="relative">
+                      <FileText className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="edit_cac_number"
+                        name="cac_number"
+                        value={editFormData.cac_number}
+                        onChange={handleEditInputChange}
+                        placeholder="RC 123456"
+                        className="pl-10 bg-secondary/50"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_tin_number">TIN Number</Label>
+                    <div className="relative">
+                      <FileText className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="edit_tin_number"
+                        name="tin_number"
+                        value={editFormData.tin_number}
+                        onChange={handleEditInputChange}
+                        placeholder="12345678-0001"
+                        className="pl-10 bg-secondary/50"
+                      />
+                    </div>
+                  </div>
+                </div>
                 <div className="space-y-2">
-                  <Label htmlFor="edit_contact_name">Contact Name</Label>
+                  <Label htmlFor="edit_address">Address</Label>
                   <Input
-                    id="edit_contact_name"
-                    name="contact_name"
-                    value={editFormData.contact_name}
+                    id="edit_address"
+                    name="address"
+                    value={editFormData.address}
                     onChange={handleEditInputChange}
-                    placeholder="Contact person name"
+                    placeholder="123 Business District"
                     className="bg-secondary/50"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit_contact_email">Contact Email *</Label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_city">City</Label>
                     <Input
-                      id="edit_contact_email"
-                      name="contact_email"
-                      type="email"
-                      value={editFormData.contact_email}
+                      id="edit_city"
+                      name="city"
+                      value={editFormData.city}
                       onChange={handleEditInputChange}
-                      placeholder="contact@company.com"
+                      placeholder="Lagos"
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_state">State</Label>
+                    <Input
+                      id="edit_state"
+                      name="state"
+                      value={editFormData.state}
+                      onChange={handleEditInputChange}
+                      placeholder="Lagos State"
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="director" className="space-y-4 mt-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_director_name">Director's Name</Label>
+                    <Input
+                      id="edit_director_name"
+                      name="director_name"
+                      value={editFormData.director_name}
+                      onChange={handleEditInputChange}
+                      placeholder="Chief John Okafor"
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_director_phone">Director's Phone</Label>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="edit_director_phone"
+                        name="director_phone"
+                        value={editFormData.director_phone}
+                        onChange={handleEditInputChange}
+                        placeholder="+234 800 123 4567"
+                        className="pl-10 bg-secondary/50"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t border-border/50 pt-4 mt-4">
+                  <h4 className="text-sm font-medium text-foreground mb-4">Primary Contact Person</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit_contact_name">Contact Name *</Label>
+                      <Input
+                        id="edit_contact_name"
+                        name="contact_name"
+                        value={editFormData.contact_name}
+                        onChange={handleEditInputChange}
+                        placeholder="Jane Doe"
+                        className="bg-secondary/50"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit_contact_phone">Contact Phone *</Label>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          id="edit_contact_phone"
+                          name="contact_phone"
+                          value={editFormData.contact_phone}
+                          onChange={handleEditInputChange}
+                          placeholder="+234 800 987 6543"
+                          className="pl-10 bg-secondary/50"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-2 mt-4">
+                    <Label htmlFor="edit_contact_email">Contact Email *</Label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        id="edit_contact_email"
+                        name="contact_email"
+                        type="email"
+                        value={editFormData.contact_email}
+                        onChange={handleEditInputChange}
+                        placeholder="contact@company.com"
+                        className="pl-10 bg-secondary/50"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="banking" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_bank_name">Bank Name</Label>
+                  <div className="relative">
+                    <CreditCard className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="edit_bank_name"
+                      name="bank_name"
+                      value={editFormData.bank_name}
+                      onChange={handleEditInputChange}
+                      placeholder="First Bank Nigeria"
                       className="pl-10 bg-secondary/50"
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit_contact_phone">Contact Phone *</Label>
-                  <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_bank_account_number">Account Number</Label>
                     <Input
-                      id="edit_contact_phone"
-                      name="contact_phone"
-                      value={editFormData.contact_phone}
+                      id="edit_bank_account_number"
+                      name="bank_account_number"
+                      value={editFormData.bank_account_number}
                       onChange={handleEditInputChange}
-                      placeholder="+234 800 123 4567"
-                      className="pl-10 bg-secondary/50"
+                      placeholder="0123456789"
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_bank_account_name">Account Name</Label>
+                    <Input
+                      id="edit_bank_account_name"
+                      name="bank_account_name"
+                      value={editFormData.bank_account_name}
+                      onChange={handleEditInputChange}
+                      placeholder="XYZ Logistics Ltd"
+                      className="bg-secondary/50"
                     />
                   </div>
                 </div>
-              </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_notes">Additional Notes</Label>
+                  <Textarea
+                    id="edit_notes"
+                    name="notes"
+                    value={editFormData.notes}
+                    onChange={handleEditInputChange}
+                    placeholder="Any additional information..."
+                    className="bg-secondary/50"
+                  />
+                </div>
+              </TabsContent>
 
-              {/* Active/Inactive Toggle */}
-              <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <Power className={`w-5 h-5 ${editFormData.is_active ? "text-success" : "text-muted-foreground"}`} />
-                  <div>
-                    <Label htmlFor="is_active" className="text-sm font-medium">Partner Status</Label>
-                    <p className="text-xs text-muted-foreground">
-                      {editFormData.is_active ? "This partner is active and available for assignments" : "This partner is inactive and won't appear in selections"}
-                    </p>
+              <TabsContent value="status" className="space-y-4 mt-4">
+                {/* Active/Inactive Toggle */}
+                <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <Power className={`w-5 h-5 ${editFormData.is_active ? "text-success" : "text-muted-foreground"}`} />
+                    <div>
+                      <Label htmlFor="edit_is_active" className="text-sm font-medium">Partner Status</Label>
+                      <p className="text-xs text-muted-foreground">
+                        {editFormData.is_active ? "This partner is active and available for assignments" : "This partner is inactive and won't appear in selections"}
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    id="edit_is_active"
+                    checked={editFormData.is_active}
+                    onCheckedChange={(checked) => setEditFormData(prev => ({ ...prev, is_active: checked }))}
+                  />
+                </div>
+
+                {/* Verification Status (read-only display) */}
+                <div className="p-4 bg-secondary/30 rounded-lg">
+                  <div className="flex items-center gap-2 text-sm">
+                    {selectedPartner.is_verified ? (
+                      <>
+                        <CheckCircle className="w-5 h-5 text-success" />
+                        <div>
+                          <p className="font-medium text-success">Verified Partner</p>
+                          <p className="text-xs text-muted-foreground">This partner has been verified</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-5 h-5 text-muted-foreground" />
+                        <div>
+                          <p className="font-medium text-muted-foreground">Not Verified</p>
+                          <p className="text-xs text-muted-foreground">This partner has not been verified yet</p>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
-                <Switch
-                  id="is_active"
-                  checked={editFormData.is_active}
-                  onCheckedChange={(checked) => setEditFormData(prev => ({ ...prev, is_active: checked }))}
-                />
-              </div>
 
-              {/* Verification Status (read-only display) */}
-              <div className="flex items-center gap-2 text-sm">
-                {selectedPartner.is_verified ? (
-                  <>
-                    <CheckCircle className="w-4 h-4 text-success" />
-                    <span className="text-success">Verified Partner</span>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-muted-foreground">Not Verified</span>
-                  </>
-                )}
-              </div>
-            </div>
+                {/* Partner Info Summary */}
+                <div className="p-4 bg-secondary/30 rounded-lg">
+                  <h4 className="text-sm font-medium mb-3">Partner Information</h4>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Created</p>
+                      <p className="font-medium">{new Date(selectedPartner.created_at).toLocaleDateString()}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Type</p>
+                      <p className="font-medium capitalize">{selectedPartner.partner_type}</p>
+                    </div>
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
           )}
 
           <DialogFooter className="mt-6">

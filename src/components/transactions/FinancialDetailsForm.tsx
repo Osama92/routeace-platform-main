@@ -248,7 +248,7 @@ const FinancialDetailsForm = ({
       form.setValue("delivery_location", dispatch.delivery_address || "");
       form.setValue("drop_point", dispatch.delivery_address || "");
       form.setValue("km_covered", dispatch.distance_km || null);
-      form.setValue("tonnage_loaded", dispatch.cargo_weight_kg ? dispatch.cargo_weight_kg / 1000 : null);
+      form.setValue("tonnage_loaded", dispatch.cargo_weight_kg || null);
       form.setValue("transaction_date", transactionDate.toISOString().split("T")[0]);
       form.setValue("period_month", transactionDate.getMonth() + 1);
       form.setValue("period_year", transactionDate.getFullYear());
