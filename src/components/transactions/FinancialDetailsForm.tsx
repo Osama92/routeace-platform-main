@@ -326,12 +326,20 @@ const FinancialDetailsForm = ({
     try {
       const monthName = MONTH_NAMES[data.period_month - 1];
 
+      // Convert empty string dates to null for database compatibility
       const transactionData = {
         ...data,
         month_name: monthName,
         dispatch_id: dispatch?.id || null,
         customer_id: dispatch?.customers?.id || null,
         imported_at: new Date().toISOString(),
+        // Convert empty date strings to null
+        transaction_date: data.transaction_date || null,
+        invoice_date: data.invoice_date || null,
+        due_date: data.due_date || null,
+        invoice_paid_date: data.invoice_paid_date || null,
+        payment_receipt_date: data.payment_receipt_date || null,
+        vendor_invoice_submission_date: data.vendor_invoice_submission_date || null,
         // Convert bank_debited to string for database compatibility
         bank_debited: data.bank_debited !== null ? String(data.bank_debited) : null,
       };
