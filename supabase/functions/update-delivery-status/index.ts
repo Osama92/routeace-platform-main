@@ -44,7 +44,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     const { dispatch_id, status, location, notes }: DeliveryUpdateRequest = await req.json();
 
-    // Get dispatch details with customer info
+    // Get dispatch details with customer and vehicle info
     const { data: dispatch, error: dispatchError } = await supabase
       .from("dispatches")
       .select(
@@ -57,6 +57,9 @@ const handler = async (req: Request): Promise<Response> => {
           company_name,
           contact_name,
           email
+        ),
+        vehicles (
+          registration_number
         )
       `
       )
@@ -112,10 +115,18 @@ const handler = async (req: Request): Promise<Response> => {
       } else {
         const resend = new Resend(resendApiKey);
 
-        const subject = `Shipment Update - ${(dispatch as any).dispatch_number}`;
+        const vehicleReg = (dispatch as any).vehicles?.registration_number || "";
+        const pickupShort = (dispatch as any).pickup_address?.split(",")[0] || (dispatch as any).pickup_address;
+        const deliveryShort = (dispatch as any).delivery_address?.split(",")[0] || (dispatch as any).delivery_address;
+
+        // Subject format: [VEHICLE] Pickup -- Delivery - Delivery Update - DSP-XXX
+        const subject = vehicleReg
+          ? `[${vehicleReg}] ${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`
+          : `${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`;
+
         const body = `Dear ${customerName || "Customer"},\n\n${
           statusMessages[status] || `Status updated to: ${status}`
-        }\n\nDispatch Number: ${(dispatch as any).dispatch_number}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}\n\nBest regards,\nLogistics Team`;
+        } Thank you for choosing us!\n\nDispatch Number: ${(dispatch as any).dispatch_number}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}\n\nThank you for your business.\n\nBest regards,\nLogistics Team`;
 
         try {
           const emailResponse = await resend.emails.send({
