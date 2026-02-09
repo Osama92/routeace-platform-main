@@ -53,6 +53,7 @@ const navigation = [
 const adminNavigation = [
   { name: "Pending Approvals", href: "/pending-approvals", icon: ClipboardCheck },
   { name: "Invoice Approvals", href: "/invoice-approvals", icon: FileText },
+  { name: "Expense Approvals", href: "/expense-approvals", icon: CircleDollarSign },
   { name: "Trip Rate Config", href: "/trip-rate-config", icon: Settings },
   { name: "Historical Data", href: "/historical-data", icon: BarChart3 },
   { name: "P&L Analytics", href: "/admin-analytics", icon: PieChart },

@@ -28,6 +28,7 @@ import Invoices from "./pages/Invoices";
 import InvoiceApprovals from "./pages/InvoiceApprovals";
 import InvoiceReports from "./pages/InvoiceReports";
 import Expenses from "./pages/Expenses";
+import ExpenseApprovals from "./pages/ExpenseApprovals";
 import VendorPayables from "./pages/VendorPayables";
 import Analytics from "./pages/Analytics";
 import AdminAnalytics from "./pages/AdminAnalytics";
@@ -199,6 +200,14 @@ const App = () => (
               element={
                 <ProtectedRoute allowedRoles={["admin", "operations"]}>
                   <Expenses />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/expense-approvals"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <ExpenseApprovals />
                 </ProtectedRoute>
               }
             />

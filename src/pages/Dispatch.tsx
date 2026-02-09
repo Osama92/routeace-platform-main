@@ -1844,9 +1844,9 @@ const DispatchPage = () => {
             </div>
             <div className="space-y-2">
               <Label>Current Location</Label>
-              <Input
+              <AddressAutocomplete
                 value={statusUpdate.location}
-                onChange={(e) => setStatusUpdate((prev) => ({ ...prev, location: e.target.value }))}
+                onChange={(val) => setStatusUpdate((prev) => ({ ...prev, location: val }))}
                 placeholder="e.g., Lagos-Ibadan Expressway"
                 className="bg-secondary/50"
               />

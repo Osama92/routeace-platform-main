@@ -848,6 +848,13 @@ export type Database = {
           updated_at: string
           vehicle_id: string | null
           vendor_id: string | null
+          approval_status: string | null
+          first_approver_id: string | null
+          first_approved_at: string | null
+          second_approver_id: string | null
+          second_approved_at: string | null
+          rejection_reason: string | null
+          submitted_by: string | null
           zoho_expense_id: string | null
           zoho_synced_at: string | null
         }
@@ -870,6 +877,13 @@ export type Database = {
           updated_at?: string
           vehicle_id?: string | null
           vendor_id?: string | null
+          approval_status?: string | null
+          first_approver_id?: string | null
+          first_approved_at?: string | null
+          second_approver_id?: string | null
+          second_approved_at?: string | null
+          rejection_reason?: string | null
+          submitted_by?: string | null
           zoho_expense_id?: string | null
           zoho_synced_at?: string | null
         }
@@ -892,6 +906,13 @@ export type Database = {
           updated_at?: string
           vehicle_id?: string | null
           vendor_id?: string | null
+          approval_status?: string | null
+          first_approver_id?: string | null
+          first_approved_at?: string | null
+          second_approver_id?: string | null
+          second_approved_at?: string | null
+          rejection_reason?: string | null
+          submitted_by?: string | null
           zoho_expense_id?: string | null
           zoho_synced_at?: string | null
         }

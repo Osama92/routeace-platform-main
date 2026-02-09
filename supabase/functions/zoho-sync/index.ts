@@ -404,6 +404,11 @@ serve(async (req) => {
           throw new Error(`Expense not found: ${expenseError?.message}`);
         }
 
+        // Only sync approved expenses
+        if (expense.approval_status && expense.approval_status !== 'approved') {
+          throw new Error('Expense must be approved before syncing to Zoho');
+        }
+
         const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense);
         await supabase
           .from('expenses')
@@ -450,7 +455,8 @@ serve(async (req) => {
         const { data: expenses } = await supabase
           .from('expenses')
           .select('*')
-          .is('zoho_expense_id', null);
+          .is('zoho_expense_id', null)
+          .eq('approval_status', 'approved');
 
         let synced = 0;
         let failed = 0;

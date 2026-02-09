@@ -8,7 +8,8 @@ const corsHeaders = {
 };
 
 interface ApprovalNotificationRequest {
-  invoice_id: string;
+  invoice_id?: string;
+  expense_id?: string;
   action: "first_approval" | "second_approval" | "rejected";
   rejection_reason?: string;
 }
@@ -59,7 +60,7 @@ serve(async (req) => {
     }
 
     const payload: ApprovalNotificationRequest = await req.json();
-    if (!payload.invoice_id || !payload.action) {
+    if ((!payload.invoice_id && !payload.expense_id) || !payload.action) {
       return new Response(JSON.stringify({ success: false, error: "Missing required fields" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -68,32 +69,91 @@ serve(async (req) => {
 
     const serviceClient = createClient(supabaseUrl, serviceRoleKey);
 
-    // Get invoice details with customer info
-    const { data: invoice, error: invoiceErr } = await serviceClient
-      .from("invoices")
-      .select(`
-        *,
-        customers(company_name)
-      `)
-      .eq("id", payload.invoice_id)
-      .single();
+    const formatCurrency = (amount: number) => {
+      return new Intl.NumberFormat("en-NG", {
+        style: "currency",
+        currency: "NGN",
+        minimumFractionDigits: 0,
+      }).format(amount);
+    };
 
-    if (invoiceErr || !invoice) {
-      return new Response(JSON.stringify({ success: false, error: "Invoice not found" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get submitter's email from profiles
     let submitterEmail: string | null = null;
-    if (invoice.submitted_by) {
-      const { data: profile } = await serviceClient
-        .from("profiles")
-        .select("email")
-        .eq("user_id", invoice.submitted_by)
+    let itemType: "Invoice" | "Expense";
+    let itemIdentifier: string;
+    let itemAmount: string;
+    let itemDetails: string; // extra HTML for the info card
+    let notificationType: string;
+
+    if (payload.invoice_id) {
+      // ---- INVOICE PATH (existing logic) ----
+      itemType = "Invoice";
+
+      const { data: invoice, error: invoiceErr } = await serviceClient
+        .from("invoices")
+        .select(`*, customers(company_name)`)
+        .eq("id", payload.invoice_id)
         .single();
-      submitterEmail = profile?.email || null;
+
+      if (invoiceErr || !invoice) {
+        return new Response(JSON.stringify({ success: false, error: "Invoice not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (invoice.submitted_by) {
+        const { data: profile } = await serviceClient
+          .from("profiles")
+          .select("email")
+          .eq("user_id", invoice.submitted_by)
+          .single();
+        submitterEmail = profile?.email || null;
+      }
+
+      const invoiceNum = invoice.invoice_number;
+      const customerName = invoice.customers?.company_name || "Unknown Customer";
+      itemIdentifier = invoiceNum;
+      itemAmount = formatCurrency(invoice.total_amount);
+      itemDetails = `
+        <p><strong>Invoice Number:</strong> ${invoiceNum}</p>
+        <p><strong>Customer:</strong> ${customerName}</p>
+        <p><strong>Amount:</strong> ${itemAmount}</p>`;
+      notificationType = `invoice_${payload.action}`;
+
+    } else {
+      // ---- EXPENSE PATH (new) ----
+      itemType = "Expense";
+
+      const { data: expense, error: expenseErr } = await serviceClient
+        .from("expenses")
+        .select("*")
+        .eq("id", payload.expense_id!)
+        .single();
+
+      if (expenseErr || !expense) {
+        return new Response(JSON.stringify({ success: false, error: "Expense not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (expense.submitted_by) {
+        const { data: profile } = await serviceClient
+          .from("profiles")
+          .select("email")
+          .eq("user_id", expense.submitted_by)
+          .single();
+        submitterEmail = profile?.email || null;
+      }
+
+      const categoryFormatted = (expense.category || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+      itemIdentifier = expense.description;
+      itemAmount = formatCurrency(expense.amount);
+      itemDetails = `
+        <p><strong>Description:</strong> ${expense.description}</p>
+        <p><strong>Category:</strong> ${categoryFormatted}</p>
+        <p><strong>Amount:</strong> ${itemAmount}</p>`;
+      notificationType = `expense_${payload.action}`;
     }
 
     if (!submitterEmail) {
@@ -105,31 +165,18 @@ serve(async (req) => {
 
     const resend = new Resend(resendApiKey);
 
-    const formatCurrency = (amount: number) => {
-      return new Intl.NumberFormat("en-NG", {
-        style: "currency",
-        currency: "NGN",
-        minimumFractionDigits: 0,
-      }).format(amount);
-    };
-
     let subject = "";
     let body = "";
-    const invoiceNum = invoice.invoice_number;
-    const customerName = invoice.customers?.company_name || "Unknown Customer";
-    const totalAmount = formatCurrency(invoice.total_amount);
 
     switch (payload.action) {
       case "first_approval":
-        subject = `🔄 Invoice ${invoiceNum} - First Approval Complete`;
+        subject = `🔄 ${itemType}: ${itemIdentifier} - First Approval Complete`;
         body = `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #10b981;">Invoice First Approval Complete</h2>
-            <p>Your invoice has passed the first level of approval and is now pending final approval.</p>
+            <h2 style="color: #10b981;">${itemType} First Approval Complete</h2>
+            <p>Your ${itemType.toLowerCase()} has passed the first level of approval and is now pending final approval.</p>
             <div style="background: #f3f4f6; padding: 16px; border-radius: 8px; margin: 16px 0;">
-              <p><strong>Invoice Number:</strong> ${invoiceNum}</p>
-              <p><strong>Customer:</strong> ${customerName}</p>
-              <p><strong>Amount:</strong> ${totalAmount}</p>
+              ${itemDetails}
               <p><strong>Status:</strong> <span style="color: #3b82f6;">Pending Second Approval</span></p>
             </div>
             <p style="color: #6b7280; font-size: 14px;">You will receive another notification once the final approval is complete.</p>
@@ -138,39 +185,35 @@ serve(async (req) => {
         break;
 
       case "second_approval":
-        subject = `✅ Invoice ${invoiceNum} - Approved!`;
+        subject = `✅ ${itemType}: ${itemIdentifier} - Approved!`;
         body = `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #10b981;">Invoice Fully Approved!</h2>
-            <p>Congratulations! Your invoice has been fully approved and is now active in the system.</p>
+            <h2 style="color: #10b981;">${itemType} Fully Approved!</h2>
+            <p>Congratulations! Your ${itemType.toLowerCase()} has been fully approved${itemType === "Expense" ? " and can now be synced to Zoho" : " and is now active in the system"}.</p>
             <div style="background: #ecfdf5; padding: 16px; border-radius: 8px; margin: 16px 0; border: 1px solid #10b981;">
-              <p><strong>Invoice Number:</strong> ${invoiceNum}</p>
-              <p><strong>Customer:</strong> ${customerName}</p>
-              <p><strong>Amount:</strong> ${totalAmount}</p>
+              ${itemDetails}
               <p><strong>Status:</strong> <span style="color: #10b981; font-weight: bold;">Approved</span></p>
             </div>
-            <p style="color: #6b7280; font-size: 14px;">The invoice is now pending payment from the customer.</p>
+            <p style="color: #6b7280; font-size: 14px;">${itemType === "Expense" ? "The expense is now ready for Zoho sync." : "The invoice is now pending payment from the customer."}</p>
           </div>
         `;
         break;
 
       case "rejected":
-        subject = `❌ Invoice ${invoiceNum} - Rejected`;
+        subject = `❌ ${itemType}: ${itemIdentifier} - Rejected`;
         body = `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #ef4444;">Invoice Rejected</h2>
-            <p>Unfortunately, your invoice has been rejected. Please review the feedback below and make necessary corrections.</p>
+            <h2 style="color: #ef4444;">${itemType} Rejected</h2>
+            <p>Unfortunately, your ${itemType.toLowerCase()} has been rejected. Please review the feedback below and make necessary corrections.</p>
             <div style="background: #fef2f2; padding: 16px; border-radius: 8px; margin: 16px 0; border: 1px solid #ef4444;">
-              <p><strong>Invoice Number:</strong> ${invoiceNum}</p>
-              <p><strong>Customer:</strong> ${customerName}</p>
-              <p><strong>Amount:</strong> ${totalAmount}</p>
+              ${itemDetails}
               <p><strong>Status:</strong> <span style="color: #ef4444; font-weight: bold;">Rejected</span></p>
             </div>
             <div style="background: #fff7ed; padding: 16px; border-radius: 8px; margin: 16px 0; border: 1px solid #f97316;">
               <p><strong>Reason for Rejection:</strong></p>
               <p style="margin: 8px 0;">${payload.rejection_reason || "No reason provided"}</p>
             </div>
-            <p style="color: #6b7280; font-size: 14px;">Please update the invoice and resubmit for approval.</p>
+            <p style="color: #6b7280; font-size: 14px;">Please update the ${itemType.toLowerCase()} and resubmit for approval.</p>
           </div>
         `;
         break;
@@ -203,7 +246,7 @@ serve(async (req) => {
       status,
       sent_at: status === "sent" ? new Date().toISOString() : null,
       error_message: errorMessage,
-      notification_type: `invoice_${payload.action}`,
+      notification_type: notificationType,
       sent_by: userData.user.id,
     });
 

@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import {
   Plus,
   Search,
@@ -74,6 +75,13 @@ interface Expense {
   is_cogs: boolean;
   cogs_vendor_id: string | null;
   created_at: string;
+  approval_status: string | null;
+  first_approver_id: string | null;
+  first_approved_at: string | null;
+  second_approver_id: string | null;
+  second_approved_at: string | null;
+  rejection_reason: string | null;
+  submitted_by: string | null;
   zoho_expense_id: string | null;
   zoho_synced_at: string | null;
 }
@@ -270,6 +278,8 @@ const Expenses = () => {
         cogs_vendor_id: formData.is_cogs ? (formData.cogs_vendor_id || null) : null,
         receipt_url: receiptUrl || null,
         created_by: user?.id,
+        approval_status: "pending_first_approval",
+        submitted_by: user?.id,
       };
 
       const { data, error } = await supabase.from("expenses").insert(insertData).select().single();
@@ -288,7 +298,7 @@ const Expenses = () => {
 
       toast({
         title: "Success",
-        description: "Expense added successfully",
+        description: "Expense submitted for approval",
       });
       setIsDialogOpen(false);
       resetForm();
@@ -324,6 +334,18 @@ const Expenses = () => {
   };
 
   const syncToZoho = async (expenseId?: string) => {
+    if (expenseId) {
+      const expense = expenses.find(e => e.id === expenseId);
+      if (expense && expense.approval_status !== 'approved') {
+        toast({
+          title: "Cannot Sync",
+          description: "Only approved expenses can be synced to Zoho",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     setSyncing(true);
     try {
       const { data, error } = await supabase.functions.invoke('zoho-sync', {
@@ -798,6 +820,7 @@ const Expenses = () => {
               <TableHead className="text-muted-foreground">Category</TableHead>
               <TableHead className="text-muted-foreground">Description</TableHead>
               <TableHead className="text-muted-foreground">Type</TableHead>
+              <TableHead className="text-muted-foreground">Approval</TableHead>
               <TableHead className="text-muted-foreground">Amount</TableHead>
               <TableHead className="text-muted-foreground">Receipt</TableHead>
               <TableHead className="text-muted-foreground">Zoho</TableHead>
@@ -807,7 +830,7 @@ const Expenses = () => {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8">
+                <TableCell colSpan={canManage ? 9 : 8} className="text-center py-8">
                   <div className="flex items-center justify-center gap-2">
                     <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                     Loading expenses...
@@ -816,7 +839,7 @@ const Expenses = () => {
               </TableRow>
             ) : filteredExpenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={canManage ? 8 : 7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={canManage ? 9 : 8} className="text-center py-8 text-muted-foreground">
                   No expenses found
                 </TableCell>
               </TableRow>
@@ -846,6 +869,30 @@ const Expenses = () => {
                       >
                         {expense.is_cogs ? "COGS" : "OPEX"}
                       </span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={
+                          expense.approval_status === "approved"
+                            ? "bg-green-500/15 text-green-600 border-green-500/30"
+                            : expense.approval_status === "rejected"
+                            ? "bg-red-500/15 text-red-600 border-red-500/30"
+                            : expense.approval_status === "pending_second_approval"
+                            ? "bg-blue-500/15 text-blue-600 border-blue-500/30"
+                            : "bg-yellow-500/15 text-yellow-600 border-yellow-500/30"
+                        }
+                      >
+                        {expense.approval_status === "pending_first_approval"
+                          ? "Pending 1st"
+                          : expense.approval_status === "pending_second_approval"
+                          ? "Pending 2nd"
+                          : expense.approval_status === "approved"
+                          ? "Approved"
+                          : expense.approval_status === "rejected"
+                          ? "Rejected"
+                          : "Draft"}
+                      </Badge>
                     </TableCell>
                     <TableCell className="font-semibold text-destructive">
                       {formatCurrency(expense.amount)}
@@ -883,8 +930,8 @@ const Expenses = () => {
                           variant="ghost"
                           size="sm"
                           onClick={() => syncToZoho(expense.id)}
-                          disabled={syncing}
-                          title={expense.zoho_synced_at ? "Re-sync to Zoho" : "Sync to Zoho"}
+                          disabled={syncing || expense.approval_status !== 'approved'}
+                          title={expense.approval_status !== 'approved' ? "Expense must be approved first" : expense.zoho_synced_at ? "Re-sync to Zoho" : "Sync to Zoho"}
                         >
                           {syncing ? (
                             <RefreshCw className="w-4 h-4 animate-spin" />
