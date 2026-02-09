@@ -172,15 +172,34 @@ const EmailNotificationsPage = () => {
     fetchData();
   }, []);
 
-  const handleSelectDispatch = (dispatchId: string) => {
+  const handleSelectDispatch = async (dispatchId: string) => {
     const dispatch = dispatches.find(d => d.id === dispatchId);
     if (dispatch) {
       const statusMessage = getStatusMessage(dispatch.status || "pending");
+
+      // Fetch the latest delivery update to get current vehicle location
+      let currentLocation = "Location not yet reported";
+      try {
+        const { data: latestUpdate } = await supabase
+          .from("delivery_updates")
+          .select("location")
+          .eq("dispatch_id", dispatchId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (latestUpdate?.location) {
+          currentLocation = latestUpdate.location;
+        }
+      } catch (err) {
+        console.error("Error fetching delivery update location:", err);
+      }
+
       setFormData(prev => ({
         ...prev,
         dispatch_id: dispatchId,
         subject: `Delivery Update - ${dispatch.dispatch_number}`,
-        body: `Dear ${dispatch.customers?.contact_name || "Customer"},\n\n${statusMessage}\n\nDispatch Number: ${dispatch.dispatch_number}\nPickup: ${dispatch.pickup_address}\nDelivery: ${dispatch.delivery_address}\n\nThank you for your business.\n\nBest regards,\nLogistics Team`,
+        body: `Dear ${dispatch.customers?.contact_name || "Customer"},\n\n${statusMessage}\n\nDispatch Number: ${dispatch.dispatch_number}\nPickup: ${dispatch.pickup_address}\nDelivery: ${dispatch.delivery_address}\nCurrent Vehicle Location: ${currentLocation}\n\nThank you for your business.\n\nBest regards,\nGlyde Systems`,
       }));
     }
   };

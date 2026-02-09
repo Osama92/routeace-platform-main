@@ -41,8 +41,9 @@ const defaultTemplates: Record<string, { subject: string; body: string }> = {
        <p><strong>Status:</strong> {{status}}</p>
        <p><strong>Truck:</strong> {{truck_number}}</p>
        <p><strong>Route:</strong> {{pickup}} → {{delivery}}</p>
+       <p><strong>Current Location:</strong> {{current_location}}</p>
      </div>
-     <p>Best regards,<br>RouteAce Logistics</p>
+     <p>Best regards,<br>Glyde Systems</p>
    </div>
  </div>`
   },
@@ -119,7 +120,8 @@ const sampleData: Record<string, Record<string, string>> = {
     status: 'In Transit',
     customer_name: 'Sample Customer Ltd',
     pickup: 'Lagos Depot',
-    delivery: 'Abuja Warehouse'
+    delivery: 'Abuja Warehouse',
+    current_location: 'Lagos-Ibadan Expressway, near Sagamu Interchange'
   },
   sla_breach: {
     dispatch_number: 'DSP-20260118-0002',

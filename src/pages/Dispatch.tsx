@@ -40,6 +40,7 @@ import {
   Trash2,
   Eye,
   FileText,
+  Route,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -164,6 +165,33 @@ interface DieselRate {
   diesel_cost_per_liter: number | null;
 }
 
+interface RouteWaypoint {
+  id?: string;
+  location_name: string;
+  address: string;
+  latitude?: number;
+  longitude?: number;
+  sequence_order: number;
+  distance_from_previous_km?: number;
+  duration_from_previous_hours?: number;
+  sla_hours?: number;
+}
+
+interface RouteData {
+  id: string;
+  name: string;
+  origin: string;
+  origin_lat: number | null;
+  origin_lng: number | null;
+  destination: string;
+  destination_lat: number | null;
+  destination_lng: number | null;
+  distance_km: number | null;
+  estimated_duration_hours: number | null;
+  is_active: boolean;
+  waypoints?: RouteWaypoint[];
+}
+
 const statusColors: Record<string, string> = {
   pending: "status-pending",
   assigned: "status-transit",
@@ -206,6 +234,9 @@ const DispatchPage = () => {
   const { toast } = useToast();
   const { user, userRole, hasAnyRole } = useAuth();
   const { logChange } = useAuditLog();
+
+  const [routes, setRoutes] = useState<RouteData[]>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string>("");
 
   const [formData, setFormData] = useState({
     customer_id: "",
@@ -268,7 +299,7 @@ const DispatchPage = () => {
 
   const fetchData = async () => {
     try {
-      const [dispatchesRes, driversRes, customersRes, vehiclesRes] = await Promise.all([
+      const [dispatchesRes, driversRes, customersRes, vehiclesRes, routesRes] = await Promise.all([
         supabase
           .from("dispatches")
           .select(`
@@ -281,6 +312,7 @@ const DispatchPage = () => {
         supabase.from("drivers").select("id, full_name, status").eq("status", "available"),
         supabase.from("customers").select("id, company_name, factory_address, factory_lat, factory_lng"),
         supabase.from("vehicles").select("id, registration_number, vehicle_type, capacity_kg, status").eq("status", "available"),
+        supabase.from("routes").select("*").eq("is_active", true).order("name"),
       ]);
 
       if (dispatchesRes.error) throw dispatchesRes.error;
@@ -292,6 +324,21 @@ const DispatchPage = () => {
       setDrivers(driversRes.data || []);
       setCustomers(customersRes.data || []);
       setVehicles(vehiclesRes.data || []);
+
+      // Fetch waypoints for each route
+      if (!routesRes.error && routesRes.data) {
+        const routesWithWaypoints = await Promise.all(
+          routesRes.data.map(async (route) => {
+            const { data: waypointsData } = await supabase
+              .from("route_waypoints")
+              .select("*")
+              .eq("route_id", route.id)
+              .order("sequence_order");
+            return { ...route, waypoints: waypointsData || [] } as RouteData;
+          })
+        );
+        setRoutes(routesWithWaypoints);
+      }
     } catch (error: any) {
       toast({
         title: "Error",
@@ -439,6 +486,63 @@ const DispatchPage = () => {
     }
   };
 
+  // Handle route selection - auto-fill addresses and dropoffs from route
+  const handleRouteChange = (routeId: string) => {
+    setSelectedRouteId(routeId);
+
+    if (routeId === "none") {
+      // Clear route-related fields to allow manual entry
+      setFormData(prev => ({
+        ...prev,
+        pickup_address: "",
+        delivery_address: "",
+        distance_km: "",
+      }));
+      setPickupCoords(null);
+      setDeliveryCoords(null);
+      setDropoffs([]);
+      return;
+    }
+
+    const route = routes.find(r => r.id === routeId);
+    if (!route) return;
+
+    // Auto-fill pickup (origin) and delivery (destination) from route
+    setFormData(prev => ({
+      ...prev,
+      pickup_address: route.origin,
+      delivery_address: route.destination,
+      distance_km: route.distance_km ? route.distance_km.toString() : prev.distance_km,
+    }));
+
+    // Set coordinates
+    if (route.origin_lat && route.origin_lng) {
+      setPickupCoords({ lat: route.origin_lat, lng: route.origin_lng });
+    }
+    if (route.destination_lat && route.destination_lng) {
+      setDeliveryCoords({ lat: route.destination_lat, lng: route.destination_lng });
+    }
+
+    // Auto-fill dropoffs from route waypoints
+    if (route.waypoints && route.waypoints.length > 0) {
+      const routeDropoffs: Dropoff[] = route.waypoints.map((wp, index) => ({
+        id: `wp-${index}-${Date.now()}`,
+        address: wp.address,
+        notes: wp.location_name || "",
+        latitude: wp.latitude || null,
+        longitude: wp.longitude || null,
+      }));
+      setDropoffs(routeDropoffs);
+    } else {
+      setDropoffs([]);
+    }
+
+    toast({
+      title: "Route Applied",
+      description: `Loaded "${route.name}" — ${route.origin.split(",")[0]} to ${route.destination.split(",")[0]}${route.waypoints?.length ? ` with ${route.waypoints.length} stop(s)` : ""}`,
+    });
+  };
+
   // Handle delivery address selection from autocomplete
   const handleDeliveryPlaceSelect = (details: { formattedAddress: string; lat: number; lng: number }) => {
     setFormData(prev => ({ ...prev, delivery_address: details.formattedAddress }));
@@ -576,6 +680,7 @@ const DispatchPage = () => {
         created_by_role: userRole,
         date_loaded: formData.date_loaded || null,
         delivery_commenced_at: formData.delivery_commenced_at || null,
+        route_id: selectedRouteId && selectedRouteId !== "none" ? selectedRouteId : null,
       };
 
       const { data, error } = await supabase.from("dispatches").insert([insertData]).select().single();
@@ -631,6 +736,7 @@ const DispatchPage = () => {
       setDropoffs([]);
       setPickupCoords(null);
       setDeliveryCoords(null);
+      setSelectedRouteId("");
       fetchData();
     } catch (error: any) {
       toast({
@@ -1150,6 +1256,35 @@ const DispatchPage = () => {
                     </SelectContent>
                   </Select>
                 </div>
+                {/* Route Selection */}
+                <div className="space-y-2">
+                  <Label>Route (Optional)</Label>
+                  <Select
+                    value={selectedRouteId || "none"}
+                    onValueChange={handleRouteChange}
+                  >
+                    <SelectTrigger className="bg-secondary/50">
+                      <Route className="w-4 h-4 mr-2" />
+                      <SelectValue placeholder="Select a route or enter addresses manually" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No Route — Enter addresses manually</SelectItem>
+                      {routes.map((route) => (
+                        <SelectItem key={route.id} value={route.id}>
+                          {route.name} ({route.origin.split(",")[0]} → {route.destination.split(",")[0]})
+                          {route.waypoints?.length ? ` • ${route.waypoints.length} stop(s)` : ""}
+                          {route.distance_km ? ` • ${route.distance_km} km` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedRouteId && selectedRouteId !== "none" && (
+                    <p className="text-xs text-muted-foreground">
+                      Addresses and drop-off points have been auto-filled from the selected route.
+                    </p>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="pickup_address">Pickup Address *</Label>
@@ -1158,9 +1293,9 @@ const DispatchPage = () => {
                       name="pickup_address"
                       value={formData.pickup_address}
                       onChange={handleInputChange}
-                      placeholder="Pickup location (auto-filled from customer)"
+                      placeholder="Pickup location (auto-filled from customer or route)"
                       className="bg-secondary/50"
-                      disabled={!!formData.customer_id && !!customers.find(c => c.id === formData.customer_id)?.factory_address}
+                      disabled={!!(selectedRouteId && selectedRouteId !== "none") || !!(formData.customer_id && customers.find(c => c.id === formData.customer_id)?.factory_address)}
                     />
                     {formData.customer_id && pickupCoords && (
                       <p className="text-xs text-muted-foreground">Coordinates: {pickupCoords.lat.toFixed(4)}, {pickupCoords.lng.toFixed(4)}</p>
@@ -1168,13 +1303,21 @@ const DispatchPage = () => {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="delivery_address">Delivery Address *</Label>
-                    <AddressAutocomplete
-                      value={formData.delivery_address}
-                      onChange={(value) => setFormData(prev => ({ ...prev, delivery_address: value }))}
-                      onPlaceSelect={handleDeliveryPlaceSelect}
-                      placeholder="Start typing delivery location..."
-                      className="bg-secondary/50"
-                    />
+                    {selectedRouteId && selectedRouteId !== "none" ? (
+                      <Input
+                        value={formData.delivery_address}
+                        className="bg-secondary/50"
+                        disabled
+                      />
+                    ) : (
+                      <AddressAutocomplete
+                        value={formData.delivery_address}
+                        onChange={(value) => setFormData(prev => ({ ...prev, delivery_address: value }))}
+                        onPlaceSelect={handleDeliveryPlaceSelect}
+                        placeholder="Start typing delivery location..."
+                        className="bg-secondary/50"
+                      />
+                    )}
                     {deliveryCoords && (
                       <p className="text-xs text-muted-foreground">Coordinates: {deliveryCoords.lat.toFixed(4)}, {deliveryCoords.lng.toFixed(4)}</p>
                     )}

@@ -118,22 +118,77 @@ const handler = async (req: Request): Promise<Response> => {
         const vehicleReg = (dispatch as any).vehicles?.registration_number || "";
         const pickupShort = (dispatch as any).pickup_address?.split(",")[0] || (dispatch as any).pickup_address;
         const deliveryShort = (dispatch as any).delivery_address?.split(",")[0] || (dispatch as any).delivery_address;
+        const currentLocation = location || "Not yet reported";
 
-        // Subject format: [VEHICLE] Pickup -- Delivery - Delivery Update - DSP-XXX
-        const subject = vehicleReg
-          ? `[${vehicleReg}] ${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`
-          : `${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`;
+        // Try to fetch the delivery_update email template from DB
+        const { data: emailTemplate } = await supabase
+          .from("email_templates")
+          .select("subject_template, body_template")
+          .eq("template_type", "delivery_update")
+          .eq("is_active", true)
+          .maybeSingle();
 
-        const body = `Dear ${customerName || "Customer"},\n\n${
-          statusMessages[status] || `Status updated to: ${status}`
-        } Thank you for choosing us!\n\nDispatch Number: ${(dispatch as any).dispatch_number}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}\n\nThank you for your business.\n\nBest regards,\nLogistics Team`;
+        let subject: string;
+        let body: string;
+
+        if (emailTemplate) {
+          // Use DB template — replace variables
+          const statusFormatted = status.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+          const templateVars: Record<string, string> = {
+            dispatch_number: (dispatch as any).dispatch_number,
+            truck_number: vehicleReg || "N/A",
+            status: statusFormatted,
+            customer_name: customerName || "Customer",
+            pickup: (dispatch as any).pickup_address,
+            delivery: (dispatch as any).delivery_address,
+            current_location: currentLocation,
+          };
+
+          subject = emailTemplate.subject_template;
+          body = emailTemplate.body_template;
+
+          for (const [key, value] of Object.entries(templateVars)) {
+            const regex = new RegExp(`\\{\\{${key}\\}\\}`, "g");
+            subject = subject.replace(regex, value);
+            body = body.replace(regex, value);
+          }
+
+          // If the DB template doesn't contain {{current_location}}, inject it before the closing card div
+          if (!emailTemplate.body_template.includes("{{current_location}}")) {
+            const locationHtml = `<p><strong>Current Location:</strong> ${currentLocation}</p>`;
+            // Insert before the closing </div> of the card (the div right before "Best regards")
+            body = body.replace(
+              /(<\/div>\s*<p>Best regards)/i,
+              `${locationHtml}</div>\n     <p>Best regards`
+            );
+          }
+
+          // Fix branding: replace any occurrence of "RouteAce Logistics" with "Glyde Systems"
+          body = body.replace(/RouteAce Logistics/g, "Glyde Systems");
+        } else {
+          // Fallback: plain text email
+          subject = vehicleReg
+            ? `[${vehicleReg}] ${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`
+            : `${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`;
+
+          const truckLine = vehicleReg ? `\nTruck: ${vehicleReg}` : "";
+          const locationLine = location
+            ? `\nCurrent Vehicle Location: ${location}`
+            : "";
+
+          body = `Dear ${customerName || "Customer"},\n\n${
+            statusMessages[status] || `Status updated to: ${status}`
+          }\n\nDispatch Number: ${(dispatch as any).dispatch_number}${truckLine}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}${locationLine}\n\nThank you for your business.\n\nBest regards,\nGlyde Systems`;
+        }
 
         try {
+          // If body is from a DB template it's already HTML; otherwise convert newlines
+          const htmlBody = emailTemplate ? body : body.replace(/\n/g, "<br/>");
           const emailResponse = await resend.emails.send({
             from: "Glyde Services <noreply@support.glydeservicesng.com>",
             to: [customerEmail],
             subject,
-            html: body.replace(/\n/g, "<br/>") ,
+            html: htmlBody,
           });
           console.log("Status update email sent:", emailResponse);
           emailSent = true;
