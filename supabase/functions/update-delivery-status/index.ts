@@ -108,92 +108,91 @@ const handler = async (req: Request): Promise<Response> => {
 
     let emailSent = false;
 
-    if (customerEmail) {
-      const resendApiKey = Deno.env.get("RESEND_API_KEY");
-      if (!resendApiKey) {
-        console.warn("RESEND_API_KEY not configured; cannot send status update email");
-      } else {
-        const resend = new Resend(resendApiKey);
+    const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    if (!resendApiKey) {
+      console.warn("RESEND_API_KEY not configured; cannot send status update email");
+    } else {
+      const resend = new Resend(resendApiKey);
 
-        const vehicleReg = (dispatch as any).vehicles?.registration_number || "";
-        const pickupShort = (dispatch as any).pickup_address?.split(",")[0] || (dispatch as any).pickup_address;
-        const deliveryShort = (dispatch as any).delivery_address?.split(",")[0] || (dispatch as any).delivery_address;
-        const currentLocation = location || "Not yet reported";
+      const vehicleReg = (dispatch as any).vehicles?.registration_number || "";
+      const pickupShort = (dispatch as any).pickup_address?.split(",")[0] || (dispatch as any).pickup_address;
+      const deliveryShort = (dispatch as any).delivery_address?.split(",")[0] || (dispatch as any).delivery_address;
+      const currentLocation = location || "Not yet reported";
 
-        // Try to fetch the delivery_update email template from DB
-        const { data: emailTemplate } = await supabase
-          .from("email_templates")
-          .select("subject_template, body_template")
-          .eq("template_type", "delivery_update")
-          .eq("is_active", true)
-          .maybeSingle();
+      // Try to fetch the delivery_update email template from DB
+      const { data: emailTemplate } = await supabase
+        .from("email_templates")
+        .select("subject_template, body_template")
+        .eq("template_type", "delivery_update")
+        .eq("is_active", true)
+        .maybeSingle();
 
-        let subject: string;
-        let body: string;
+      let subject: string;
+      let body: string;
 
-        if (emailTemplate) {
-          // Use DB template — replace variables
-          const statusFormatted = status.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
-          const templateVars: Record<string, string> = {
-            dispatch_number: (dispatch as any).dispatch_number,
-            truck_number: vehicleReg || "N/A",
-            status: statusFormatted,
-            customer_name: customerName || "Customer",
-            pickup: (dispatch as any).pickup_address,
-            delivery: (dispatch as any).delivery_address,
-            current_location: currentLocation,
-          };
+      if (emailTemplate) {
+        // Use DB template — replace variables
+        const statusFormatted = status.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+        const templateVars: Record<string, string> = {
+          dispatch_number: (dispatch as any).dispatch_number,
+          truck_number: vehicleReg || "N/A",
+          status: statusFormatted,
+          customer_name: customerName || "Customer",
+          pickup: (dispatch as any).pickup_address,
+          delivery: (dispatch as any).delivery_address,
+          current_location: currentLocation,
+        };
 
-          subject = emailTemplate.subject_template;
-          body = emailTemplate.body_template;
+        subject = emailTemplate.subject_template;
+        body = emailTemplate.body_template;
 
-          for (const [key, value] of Object.entries(templateVars)) {
-            const regex = new RegExp(`\\{\\{${key}\\}\\}`, "g");
-            subject = subject.replace(regex, value);
-            body = body.replace(regex, value);
-          }
-
-          // If the DB template doesn't contain {{current_location}}, inject it before the closing card div
-          if (!emailTemplate.body_template.includes("{{current_location}}")) {
-            const locationHtml = `<p><strong>Current Location:</strong> ${currentLocation}</p>`;
-            // Insert before the closing </div> of the card (the div right before "Best regards")
-            body = body.replace(
-              /(<\/div>\s*<p>Best regards)/i,
-              `${locationHtml}</div>\n     <p>Best regards`
-            );
-          }
-
-          // Fix branding: replace any occurrence of "RouteAce Logistics" with "Glyde Systems"
-          body = body.replace(/RouteAce Logistics/g, "Glyde Systems");
-        } else {
-          // Fallback: plain text email
-          subject = vehicleReg
-            ? `[${vehicleReg}] ${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`
-            : `${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`;
-
-          const truckLine = vehicleReg ? `\nTruck: ${vehicleReg}` : "";
-          const locationLine = location
-            ? `\nCurrent Vehicle Location: ${location}`
-            : "";
-
-          body = `Dear ${customerName || "Customer"},\n\n${
-            statusMessages[status] || `Status updated to: ${status}`
-          }\n\nDispatch Number: ${(dispatch as any).dispatch_number}${truckLine}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}${locationLine}\n\nThank you for your business.\n\nBest regards,\nGlyde Systems`;
+        for (const [key, value] of Object.entries(templateVars)) {
+          const regex = new RegExp(`\\{\\{${key}\\}\\}`, "g");
+          subject = subject.replace(regex, value);
+          body = body.replace(regex, value);
         }
 
+        // If the DB template doesn't contain {{current_location}}, inject it before the closing card div
+        if (!emailTemplate.body_template.includes("{{current_location}}")) {
+          const locationHtml = `<p><strong>Current Location:</strong> ${currentLocation}</p>`;
+          body = body.replace(
+            /(<\/div>\s*<p>Best regards)/i,
+            `${locationHtml}</div>\n     <p>Best regards`
+          );
+        }
+
+        // Fix branding
+        body = body.replace(/RouteAce Logistics/g, "Glyde Systems");
+      } else {
+        // Fallback: plain text email
+        subject = vehicleReg
+          ? `[${vehicleReg}] ${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`
+          : `${pickupShort} -- ${deliveryShort} - Delivery Update - ${(dispatch as any).dispatch_number}`;
+
+        const truckLine = vehicleReg ? `\nTruck: ${vehicleReg}` : "";
+        const locationLine = location
+          ? `\nCurrent Vehicle Location: ${location}`
+          : "";
+
+        body = `Dear ${customerName || "Customer"},\n\n${
+          statusMessages[status] || `Status updated to: ${status}`
+        }\n\nDispatch Number: ${(dispatch as any).dispatch_number}${truckLine}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}${locationLine}\n\nThank you for your business.\n\nBest regards,\nGlyde Systems`;
+      }
+
+      const htmlBody = emailTemplate ? body : body.replace(/\n/g, "<br/>");
+
+      // --- Send to CUSTOMER ---
+      if (customerEmail) {
         try {
-          // If body is from a DB template it's already HTML; otherwise convert newlines
-          const htmlBody = emailTemplate ? body : body.replace(/\n/g, "<br/>");
           const emailResponse = await resend.emails.send({
             from: "Glyde Services <noreply@support.glydeservicesng.com>",
             to: [customerEmail],
             subject,
             html: htmlBody,
           });
-          console.log("Status update email sent:", emailResponse);
+          console.log("Status update email sent to customer:", emailResponse);
           emailSent = true;
 
-          // Mark delivery update email as sent
           await supabase
             .from("delivery_updates")
             .update({ email_sent: true })
@@ -202,7 +201,6 @@ const handler = async (req: Request): Promise<Response> => {
             .order("created_at", { ascending: false })
             .limit(1);
 
-          // Log email
           await supabase.from("email_notifications").insert({
             dispatch_id,
             recipient_email: customerEmail,
@@ -217,12 +215,75 @@ const handler = async (req: Request): Promise<Response> => {
             sla_response_time_minutes: 0,
           });
         } catch (e: any) {
-          console.error("Failed to send status update email:", e);
+          console.error("Failed to send status update email to customer:", e);
           await supabase.from("email_notifications").insert({
             dispatch_id,
             recipient_email: customerEmail,
             recipient_type: "customer",
             subject: `Shipment Update - ${(dispatch as any).dispatch_number}`,
+            body: `Failed to send. Intended body:\n\n${body}`,
+            status: "failed",
+            error_message: e?.message ?? "Failed to send",
+            notification_type: "status_update",
+            sent_by: userData.user.id,
+          });
+        }
+      }
+
+      // --- Send to LEADERSHIP & SUPPORT ---
+      const { data: integrationData } = await supabase
+        .from("integrations")
+        .select("name, config")
+        .eq("name", "notifications")
+        .maybeSingle();
+
+      const notificationsConfig = (integrationData?.config as Record<string, any>) || {};
+      const leadershipEmail = typeof notificationsConfig.leadership_email === "string" && notificationsConfig.leadership_email
+        ? notificationsConfig.leadership_email : null;
+      const supportEmailAddr = typeof notificationsConfig.support_email === "string" && notificationsConfig.support_email
+        ? notificationsConfig.support_email : null;
+
+      // Build unique list of internal recipients (exclude customer to avoid duplicates)
+      const internalRecipients: { email: string; type: string }[] = [];
+      if (leadershipEmail && leadershipEmail !== customerEmail) {
+        internalRecipients.push({ email: leadershipEmail, type: "leadership" });
+      }
+      if (supportEmailAddr && supportEmailAddr !== customerEmail && supportEmailAddr !== leadershipEmail) {
+        internalRecipients.push({ email: supportEmailAddr, type: "support" });
+      }
+
+      const internalSubject = `[INTERNAL] ${subject}`;
+
+      for (const recipient of internalRecipients) {
+        try {
+          const internalResponse = await resend.emails.send({
+            from: "Glyde Services <noreply@support.glydeservicesng.com>",
+            to: [recipient.email],
+            subject: internalSubject,
+            html: htmlBody,
+          });
+          console.log(`Status update email sent to ${recipient.type}:`, internalResponse);
+
+          await supabase.from("email_notifications").insert({
+            dispatch_id,
+            recipient_email: recipient.email,
+            recipient_type: recipient.type,
+            subject: internalSubject,
+            body,
+            status: "sent",
+            sent_at: new Date().toISOString(),
+            notification_type: "status_update",
+            sent_by: userData.user.id,
+            sla_met: true,
+            sla_response_time_minutes: 0,
+          });
+        } catch (e: any) {
+          console.error(`Failed to send status update email to ${recipient.type}:`, e);
+          await supabase.from("email_notifications").insert({
+            dispatch_id,
+            recipient_email: recipient.email,
+            recipient_type: recipient.type,
+            subject: internalSubject,
             body: `Failed to send. Intended body:\n\n${body}`,
             status: "failed",
             error_message: e?.message ?? "Failed to send",
