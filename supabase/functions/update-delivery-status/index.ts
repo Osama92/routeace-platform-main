@@ -44,7 +44,7 @@ const handler = async (req: Request): Promise<Response> => {
 
     const { dispatch_id, status, location, notes }: DeliveryUpdateRequest = await req.json();
 
-    // Get dispatch details with customer and vehicle info
+    // Get dispatch details with customer, vehicle, and driver info
     const { data: dispatch, error: dispatchError } = await supabase
       .from("dispatches")
       .select(
@@ -53,6 +53,7 @@ const handler = async (req: Request): Promise<Response> => {
         dispatch_number,
         pickup_address,
         delivery_address,
+        driver_id,
         customers (
           company_name,
           contact_name,
@@ -81,6 +82,22 @@ const handler = async (req: Request): Promise<Response> => {
       .eq("id", dispatch_id);
 
     if (updateError) throw updateError;
+
+    // Increment driver's total_trips when dispatch is delivered
+    if (status === "delivered" && (dispatch as any).driver_id) {
+      const driverId = (dispatch as any).driver_id;
+      // Count all delivered dispatches for this driver to set accurate total
+      const { count } = await supabase
+        .from("dispatches")
+        .select("id", { count: "exact", head: true })
+        .eq("driver_id", driverId)
+        .eq("status", "delivered");
+
+      await supabase
+        .from("drivers")
+        .update({ total_trips: count || 0 })
+        .eq("id", driverId);
+    }
 
     // Create delivery update record
     const { error: insertError } = await supabase.from("delivery_updates").insert({

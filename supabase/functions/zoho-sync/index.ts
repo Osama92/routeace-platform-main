@@ -147,11 +147,23 @@ async function syncInvoiceToZoho(
 const expenseCategoryToZohoAccount: Record<string, string> = {
   'fuel': 'Fuel/Mileage Expenses',
   'maintenance': 'Repairs and Maintenance',
+  'repairs': 'Repairs and Maintenance',
   'driver_salary': 'Salaries and Employee Wages',
+  'employee_salary': 'Salaries and Employee Wages',
   'insurance': 'Insurance',
   'toll': 'Travel Expenses',
+  'tolls': 'Travel Expenses',
   'loading': 'Cost of Goods Sold',
+  'cogs': 'Cost of Goods Sold',
   'parking': 'Travel Expenses',
+  'administrative': 'Office Supplies',
+  'marketing': 'Advertising And Marketing',
+  'utilities': 'Electricity and Gas',
+  'rent': 'Rent Expense',
+  'equipment': 'Equipment Rental',
+  'vat': 'Tax Expense',
+  'interest_payment': 'Interest Expense',
+  'commission': 'Commission Expense',
   'other': 'Miscellaneous Expenses',
 };
 
@@ -160,12 +172,11 @@ async function getExpenseAccountId(
   organizationId: string,
   category?: string
 ): Promise<string | null> {
-  // Try to find a matching account based on category
   const targetAccountName = category ? expenseCategoryToZohoAccount[category] : null;
 
-  // Fetch chart of accounts to find expense accounts
+  // Fetch ALL chart of accounts (no filter) to avoid case-sensitivity issues with account_type param
   const accountsResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}&account_type=expense`,
+    `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}`,
     {
       headers: {
         'Authorization': `Zoho-oauthtoken ${accessToken}`,
@@ -177,11 +188,23 @@ async function getExpenseAccountId(
   const accountsData = await accountsResponse.json();
 
   if (!accountsData.chartofaccounts || accountsData.chartofaccounts.length === 0) {
-    console.error('No expense accounts found in Zoho');
+    console.error('No accounts found in Zoho Chart of Accounts');
     return null;
   }
 
-  const accounts = accountsData.chartofaccounts;
+  // Filter to only expense-type accounts (expense, cost_of_goods_sold)
+  const expenseAccountTypes = ['expense', 'cost_of_goods_sold'];
+  const accounts = accountsData.chartofaccounts.filter((acc: any) =>
+    expenseAccountTypes.includes(acc.account_type?.toLowerCase())
+  );
+
+  console.log(`Found ${accounts.length} expense accounts in Zoho (out of ${accountsData.chartofaccounts.length} total)`);
+
+  if (accounts.length === 0) {
+    console.error('No expense-type accounts found in Zoho. Available account types:',
+      [...new Set(accountsData.chartofaccounts.map((a: any) => a.account_type))]);
+    return null;
+  }
 
   // Try to find a matching account by name
   if (targetAccountName) {
@@ -190,25 +213,26 @@ async function getExpenseAccountId(
       targetAccountName.toLowerCase().includes(acc.account_name.toLowerCase())
     );
     if (matchingAccount) {
-      console.log(`Found matching Zoho account for category "${category}":`, matchingAccount.account_name);
+      console.log(`Found matching Zoho account for category "${category}":`, matchingAccount.account_name, matchingAccount.account_id);
       return matchingAccount.account_id;
     }
+    console.log(`No exact match for "${targetAccountName}", trying fallbacks...`);
   }
 
   // Fallback: Look for common expense account names
-  const fallbackNames = ['Miscellaneous Expenses', 'Other Expenses', 'Operating Expenses', 'General Expenses'];
+  const fallbackNames = ['Miscellaneous Expenses', 'Other Expenses', 'Operating Expenses', 'General Expenses', 'Office Supplies'];
   for (const name of fallbackNames) {
     const fallbackAccount = accounts.find((acc: any) =>
       acc.account_name.toLowerCase().includes(name.toLowerCase())
     );
     if (fallbackAccount) {
-      console.log(`Using fallback Zoho expense account:`, fallbackAccount.account_name);
+      console.log(`Using fallback Zoho expense account:`, fallbackAccount.account_name, fallbackAccount.account_id);
       return fallbackAccount.account_id;
     }
   }
 
   // Last resort: use the first expense account available
-  console.log(`Using first available Zoho expense account:`, accounts[0].account_name);
+  console.log(`Using first available Zoho expense account:`, accounts[0].account_name, accounts[0].account_id);
   return accounts[0].account_id;
 }
 
@@ -266,8 +290,9 @@ async function syncExpenseToZoho(
     return expenseResult.expense.expense_id;
   }
 
-  console.error('Failed to create expense in Zoho:', expenseResult);
-  return null;
+  const errorMsg = expenseResult?.message || JSON.stringify(expenseResult);
+  console.error('Failed to create expense in Zoho:', errorMsg);
+  throw new Error(`Zoho API error: ${errorMsg}`);
 }
 
 async function fetchInvoicesFromZoho(accessToken: string, organizationId: string) {
@@ -380,17 +405,11 @@ serve(async (req) => {
         }
 
         const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense);
-
-        if (zohoExpenseId) {
-          await supabase
-            .from('expenses')
-            .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
-            .eq('id', expenseId);
-          result.zoho_expense_id = zohoExpenseId;
-        } else {
-          result.success = false;
-          result.error = 'Failed to sync expense to Zoho';
-        }
+        await supabase
+          .from('expenses')
+          .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
+          .eq('id', expenseId);
+        result.zoho_expense_id = zohoExpenseId;
         break;
       }
 

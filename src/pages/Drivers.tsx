@@ -133,7 +133,27 @@ const DriversPage = () => {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setDrivers(data || []);
+
+      // Count delivered dispatches per driver for accurate completed trips
+      const { data: deliveredCounts } = await supabase
+        .from("dispatches")
+        .select("driver_id")
+        .eq("status", "delivered")
+        .not("driver_id", "is", null);
+
+      const tripCountMap: Record<string, number> = {};
+      deliveredCounts?.forEach((d: any) => {
+        if (d.driver_id) {
+          tripCountMap[d.driver_id] = (tripCountMap[d.driver_id] || 0) + 1;
+        }
+      });
+
+      const driversWithTrips = (data || []).map((driver: any) => ({
+        ...driver,
+        total_trips: tripCountMap[driver.id] || 0,
+      }));
+
+      setDrivers(driversWithTrips);
     } catch (error: any) {
       toast({
         title: "Error",

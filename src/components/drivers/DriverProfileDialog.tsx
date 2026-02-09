@@ -79,6 +79,7 @@ const DriverProfileDialog = ({ driver, open, onOpenChange, onUpdate }: DriverPro
   const [saving, setSaving] = useState(false);
   const [documents, setDocuments] = useState<DriverDocument[]>([]);
   const [recentTrips, setRecentTrips] = useState<RecentTrip[]>([]);
+  const [completedTripsCount, setCompletedTripsCount] = useState<number>(0);
   const [formData, setFormData] = useState({
     full_name: "",
     email: "",
@@ -127,6 +128,14 @@ const DriverProfileDialog = ({ driver, open, onOpenChange, onUpdate }: DriverPro
       .order("created_at", { ascending: false })
       .limit(10);
     setRecentTrips(trips || []);
+
+    // Count all delivered dispatches for this driver
+    const { count } = await supabase
+      .from("dispatches")
+      .select("id", { count: "exact", head: true })
+      .eq("driver_id", driverId)
+      .eq("status", "delivered");
+    setCompletedTripsCount(count || 0);
   };
 
   const handleSave = async () => {
@@ -322,8 +331,8 @@ const DriverProfileDialog = ({ driver, open, onOpenChange, onUpdate }: DriverPro
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 bg-primary/10 rounded-lg text-center">
                     <Truck className="w-8 h-8 text-primary mx-auto mb-2" />
-                    <p className="text-2xl font-bold">{driver.total_trips || 0}</p>
-                    <p className="text-sm text-muted-foreground">Total Trips</p>
+                    <p className="text-2xl font-bold">{completedTripsCount}</p>
+                    <p className="text-sm text-muted-foreground">Completed Trips</p>
                   </div>
                   <div className="p-4 bg-warning/10 rounded-lg text-center">
                     <Star className="w-8 h-8 text-warning mx-auto mb-2" />
