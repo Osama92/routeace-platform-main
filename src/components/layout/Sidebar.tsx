@@ -44,7 +44,7 @@ const navigation = [
   { name: "Routes", href: "/routes", icon: Route, roles: ["admin"] }, // Removed operations
   { name: "Customers", href: "/customers", icon: Building2, roles: ["admin", "support"] }, // Removed operations
   { name: "Partners", href: "/partners", icon: Handshake, roles: ["admin"] }, // Removed operations
-  { name: "Vendor Performance", href: "/vendor-performance", icon: TrendingUp, roles: ["admin", "operations"] }, // Keep but hide revenue
+  { name: "Partner Performance", href: "/vendor-performance", icon: TrendingUp, roles: ["admin", "operations"] }, // Keep but hide revenue
   { name: "Invoices", href: "/invoices", icon: FileText, roles: ["admin", "support", "operations"] },
   { name: "Expenses", href: "/expenses", icon: CircleDollarSign, roles: ["admin", "operations"] },
   { name: "Analytics", href: "/analytics", icon: BarChart3, roles: ["admin", "operations"] }, // Keep but hide revenue

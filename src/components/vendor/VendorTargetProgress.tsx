@@ -96,7 +96,7 @@ const VendorTargetProgress = () => {
         if (!vendorMap[vendorId]) {
           vendorMap[vendorId] = {
             vendorId,
-            vendorName: target.partners?.company_name || "Unknown Vendor",
+            vendorName: target.partners?.company_name || "Unknown Partner",
             targets: {},
             actuals: {},
           };
@@ -190,7 +190,7 @@ const VendorTargetProgress = () => {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="min-w-[150px]">Vendor</TableHead>
+                  <TableHead className="min-w-[150px]">Partner</TableHead>
                   {TRUCK_TYPES.map((type) => (
                     <TableHead key={type} className="text-center min-w-[100px]">
                       {type}

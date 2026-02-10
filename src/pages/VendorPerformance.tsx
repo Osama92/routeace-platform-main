@@ -121,7 +121,7 @@ const VendorPerformance = () => {
       const { data: partnersData, error: partnersError } = await supabase
         .from("partners")
         .select("id, company_name")
-        .eq("partner_type", "vendor")
+        .in("partner_type", ["transporter", "3pl"])
         .eq("approval_status", "approved");
 
       if (partnersError) throw partnersError;
@@ -292,8 +292,8 @@ const VendorPerformance = () => {
 
   return (
     <DashboardLayout
-      title="Vendor Performance"
-      subtitle="Track and analyze vendor partner metrics and delivery performance"
+      title="Partner Performance"
+      subtitle="Track and analyze partner metrics and delivery performance"
     >
       <div className="space-y-6">
         {/* Tabs for different sections */}
@@ -348,7 +348,7 @@ const VendorPerformance = () => {
             <div className={`grid grid-cols-1 ${hideFinancialData ? "md:grid-cols-3" : "md:grid-cols-4"} gap-4`}>
               {[
                 {
-                  label: "Active Vendors",
+                  label: "Active Partners",
                   value: vendors.length.toString(),
                   icon: Handshake,
                   color: "text-primary",
@@ -399,7 +399,7 @@ const VendorPerformance = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <BarChart3 className="w-5 h-5" />
-                  Vendor Comparison
+                  Partner Comparison
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -428,14 +428,14 @@ const VendorPerformance = () => {
             {/* Vendors Table */}
             <Card>
               <CardHeader>
-                <CardTitle>Vendor Rankings</CardTitle>
+                <CardTitle>Partner Rankings</CardTitle>
               </CardHeader>
               <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12">#</TableHead>
-                      <TableHead>Vendor</TableHead>
+                      <TableHead>Partner</TableHead>
                       <TableHead className="text-center">Trips</TableHead>
                       <TableHead className="text-center">On-Time Rate</TableHead>
                       <TableHead className="text-center">SLA Breaches</TableHead>
@@ -493,7 +493,7 @@ const VendorPerformance = () => {
                     {vendors.length === 0 && !loading && (
                       <TableRow>
                         <TableCell colSpan={hideFinancialData ? 7 : 9} className="text-center py-8 text-muted-foreground">
-                          No vendor data available for this period
+                          No partner data available for this period
                         </TableCell>
                       </TableRow>
                     )}

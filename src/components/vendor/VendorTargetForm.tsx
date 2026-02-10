@@ -64,7 +64,7 @@ const VendorTargetForm = ({ onSaveComplete }: VendorTargetFormProps) => {
     const { data, error } = await supabase
       .from("partners")
       .select("id, company_name")
-      .eq("partner_type", "vendor")
+      .in("partner_type", ["transporter", "3pl"])
       .eq("approval_status", "approved")
       .order("company_name");
 
@@ -108,8 +108,8 @@ const VendorTargetForm = ({ onSaveComplete }: VendorTargetFormProps) => {
   const handleSave = async () => {
     if (!selectedVendor) {
       toast({
-        title: "Select a vendor",
-        description: "Please select a vendor to set targets for",
+        title: "Select a partner",
+        description: "Please select a partner to set targets for",
         variant: "destructive",
       });
       return;
@@ -136,7 +136,7 @@ const VendorTargetForm = ({ onSaveComplete }: VendorTargetFormProps) => {
 
       toast({
         title: "Targets saved",
-        description: "Vendor truck deployment targets have been updated",
+        description: "Partner truck deployment targets have been updated",
       });
       onSaveComplete?.();
     } catch (error: any) {
@@ -158,17 +158,17 @@ const VendorTargetForm = ({ onSaveComplete }: VendorTargetFormProps) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Target className="w-5 h-5" />
-          Set Vendor Truck Deployment Targets
+          Set Partner Truck Deployment Targets
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Vendor and Period Selection */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-2">
-            <Label>Vendor</Label>
+            <Label>Partner</Label>
             <Select value={selectedVendor} onValueChange={setSelectedVendor}>
               <SelectTrigger>
-                <SelectValue placeholder="Select vendor" />
+                <SelectValue placeholder="Select partner" />
               </SelectTrigger>
               <SelectContent>
                 {vendors.map((vendor) => (
