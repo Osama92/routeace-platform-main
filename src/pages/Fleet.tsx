@@ -44,6 +44,7 @@ import {
   Upload,
   Clock,
   MapPin,
+  Pencil,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
@@ -112,9 +113,11 @@ const FleetPage = () => {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [fleetTypeFilter, setFleetTypeFilter] = useState<string>("all");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDocDialogOpen, setIsDocDialogOpen] = useState(false);
   const [isLocationDialogOpen, setIsLocationDialogOpen] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [locationFormData, setLocationFormData] = useState({
@@ -136,6 +139,18 @@ const FleetPage = () => {
     year: "",
     capacity_kg: "",
     fuel_type: "diesel",
+    fleet_type: "internal",
+    vendor_id: "",
+  });
+
+  const [editFormData, setEditFormData] = useState({
+    registration_number: "",
+    vehicle_type: "",
+    make: "",
+    model: "",
+    year: "",
+    capacity_kg: "",
+    status: "available",
     fleet_type: "internal",
     vendor_id: "",
   });
@@ -291,6 +306,99 @@ const FleetPage = () => {
     } finally {
       setSaving(false);
     }
+  };
+
+  const openEditDialog = (vehicle: Vehicle) => {
+    setEditingVehicle(vehicle);
+    setEditFormData({
+      registration_number: vehicle.registration_number,
+      vehicle_type: vehicle.vehicle_type,
+      make: vehicle.make || "",
+      model: vehicle.model || "",
+      year: vehicle.year?.toString() || "",
+      capacity_kg: vehicle.capacity_kg?.toString() || "",
+      status: vehicle.status || "available",
+      fleet_type: vehicle.fleet_type || "internal",
+      vendor_id: vehicle.vendor_id || "",
+    });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleEditSubmit = async () => {
+    if (!editingVehicle) return;
+
+    if (!editFormData.registration_number || !editFormData.vehicle_type) {
+      toast({
+        title: "Validation Error",
+        description: "Please fill in required fields",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (editFormData.fleet_type === "3pl" && !editFormData.vendor_id) {
+      toast({
+        title: "Validation Error",
+        description: "Please select a 3PL vendor for this vehicle",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updateData = {
+        registration_number: editFormData.registration_number,
+        vehicle_type: editFormData.vehicle_type,
+        make: editFormData.make || null,
+        model: editFormData.model || null,
+        year: editFormData.year ? parseInt(editFormData.year) : null,
+        capacity_kg: editFormData.capacity_kg ? parseFloat(editFormData.capacity_kg) : null,
+        status: editFormData.status,
+        fleet_type: editFormData.fleet_type,
+        vendor_id: editFormData.fleet_type === "3pl" ? editFormData.vendor_id : null,
+      };
+
+      const { error } = await supabase
+        .from("vehicles")
+        .update(updateData)
+        .eq("id", editingVehicle.id);
+
+      if (error) throw error;
+
+      await logChange({
+        table_name: "vehicles",
+        record_id: editingVehicle.id,
+        action: "update",
+        old_data: {
+          registration_number: editingVehicle.registration_number,
+          vehicle_type: editingVehicle.vehicle_type,
+          status: editingVehicle.status,
+        },
+        new_data: updateData,
+      });
+
+      toast({
+        title: "Success",
+        description: "Vehicle updated successfully",
+      });
+      setIsEditDialogOpen(false);
+      setEditingVehicle(null);
+      fetchVehicles();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update vehicle",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEditFormData((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleAddDocument = async () => {
@@ -869,6 +977,17 @@ const FleetPage = () => {
 
                 {/* Actions */}
                 <div className="flex gap-2">
+                  {canManage && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => openEditDialog(vehicle)}
+                    >
+                      <Pencil className="w-4 h-4 mr-1" />
+                      Edit
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -964,6 +1083,173 @@ const FleetPage = () => {
             </Button>
             <Button onClick={handleAddDocument} disabled={saving}>
               {saving ? "Adding..." : "Add Document"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Vehicle Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle className="font-heading">Edit Vehicle - {editingVehicle?.registration_number}</DialogTitle>
+            <DialogDescription>
+              Update vehicle details and specifications.
+            </DialogDescription>
+          </DialogHeader>
+          <Tabs defaultValue="details" className="mt-4">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="details">Vehicle Details</TabsTrigger>
+              <TabsTrigger value="fleet">Fleet & Status</TabsTrigger>
+              <TabsTrigger value="specs">Specifications</TabsTrigger>
+            </TabsList>
+            <TabsContent value="details" className="space-y-4 mt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_registration_number">Registration Number *</Label>
+                  <Input
+                    id="edit_registration_number"
+                    name="registration_number"
+                    value={editFormData.registration_number}
+                    onChange={handleEditInputChange}
+                    placeholder="LAG-XXX-XX"
+                    className="bg-secondary/50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_vehicle_type">Vehicle Type *</Label>
+                  <Select
+                    value={editFormData.vehicle_type}
+                    onValueChange={(value) => setEditFormData(prev => ({ ...prev, vehicle_type: value }))}
+                  >
+                    <SelectTrigger className="bg-secondary/50">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="light_truck">Light Truck</SelectItem>
+                      <SelectItem value="medium_truck">Medium Truck</SelectItem>
+                      <SelectItem value="heavy_truck">Heavy Truck</SelectItem>
+                      <SelectItem value="trailer">Trailer</SelectItem>
+                      <SelectItem value="tanker">Tanker</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_make">Make</Label>
+                  <Input
+                    id="edit_make"
+                    name="make"
+                    value={editFormData.make}
+                    onChange={handleEditInputChange}
+                    placeholder="e.g., Mercedes-Benz"
+                    className="bg-secondary/50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_model">Model</Label>
+                  <Input
+                    id="edit_model"
+                    name="model"
+                    value={editFormData.model}
+                    onChange={handleEditInputChange}
+                    placeholder="e.g., Actros"
+                    className="bg-secondary/50"
+                  />
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="fleet" className="space-y-4 mt-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_status">Status</Label>
+                <Select
+                  value={editFormData.status}
+                  onValueChange={(value) => setEditFormData(prev => ({ ...prev, status: value }))}
+                >
+                  <SelectTrigger className="bg-secondary/50">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="available">Available</SelectItem>
+                    <SelectItem value="in_use">In Use</SelectItem>
+                    <SelectItem value="maintenance">Maintenance</SelectItem>
+                    <SelectItem value="retired">Retired</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_fleet_type">Fleet Type</Label>
+                <Select
+                  value={editFormData.fleet_type}
+                  onValueChange={(value) => setEditFormData(prev => ({ ...prev, fleet_type: value, vendor_id: value === "internal" ? "" : prev.vendor_id }))}
+                >
+                  <SelectTrigger className="bg-secondary/50">
+                    <SelectValue placeholder="Select fleet type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="internal">Internal Fleet (Owned)</SelectItem>
+                    <SelectItem value="3pl">3PL Vendor</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {editFormData.fleet_type === "3pl" && (
+                <div className="space-y-2">
+                  <Label htmlFor="edit_vendor_id">3PL Vendor *</Label>
+                  <Select
+                    value={editFormData.vendor_id}
+                    onValueChange={(value) => setEditFormData(prev => ({ ...prev, vendor_id: value }))}
+                  >
+                    <SelectTrigger className="bg-secondary/50">
+                      <SelectValue placeholder="Select vendor" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-[300px]">
+                      {vendors.map((vendor) => (
+                        <SelectItem key={vendor.id} value={vendor.id}>
+                          {vendor.company_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </TabsContent>
+            <TabsContent value="specs" className="space-y-4 mt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_year">Year</Label>
+                  <Input
+                    id="edit_year"
+                    name="year"
+                    type="number"
+                    value={editFormData.year}
+                    onChange={handleEditInputChange}
+                    placeholder="2024"
+                    className="bg-secondary/50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_capacity_kg">Capacity (Tons)</Label>
+                  <Input
+                    id="edit_capacity_kg"
+                    name="capacity_kg"
+                    type="number"
+                    step="0.01"
+                    value={editFormData.capacity_kg}
+                    onChange={handleEditInputChange}
+                    placeholder="30"
+                    className="bg-secondary/50"
+                  />
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
+          <DialogFooter className="mt-6">
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleEditSubmit} disabled={saving}>
+              {saving ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
