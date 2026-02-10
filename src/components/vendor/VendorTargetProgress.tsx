@@ -19,8 +19,36 @@ import {
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, TrendingUp, TrendingDown, Minus, Truck } from "lucide-react";
+import { startOfMonth, endOfMonth } from "date-fns";
 
 const TRUCK_TYPES = ["3T", "5T", "10T", "15T", "20T", "30T", "45T", "60T"] as const;
+
+// Map vehicle capacity_kg to the standard truck type categories
+const capacityToTruckType = (capacityKg: number | null): string | null => {
+  if (!capacityKg) return null;
+  const tons = capacityKg / 1000;
+  if (tons <= 3) return "3T";
+  if (tons <= 5) return "5T";
+  if (tons <= 10) return "10T";
+  if (tons <= 15) return "15T";
+  if (tons <= 20) return "20T";
+  if (tons <= 30) return "30T";
+  if (tons <= 45) return "45T";
+  return "60T";
+};
+
+// Normalize a truck_type string to standard format (e.g. "10t" → "10T")
+const normalizeTruckTypeStr = (truckType: string | null): string | null => {
+  if (!truckType) return null;
+  const upper = truckType.toUpperCase().trim();
+  if ((TRUCK_TYPES as readonly string[]).includes(upper)) return upper;
+  const match = upper.match(/(\d+)/);
+  if (match) {
+    const candidate = match[1] + "T";
+    if ((TRUCK_TYPES as readonly string[]).includes(candidate)) return candidate;
+  }
+  return null;
+};
 
 const MONTHS = [
   { value: 1, label: "January" },
@@ -72,20 +100,42 @@ const VendorTargetProgress = () => {
 
       if (targetsError) throw targetsError;
 
-      // Fetch actuals for these targets
-      const targetIds = targetsData?.map((t) => t.id) || [];
-      
-      const { data: actualsData, error: actualsError } = await supabase
-        .from("vendor_truck_actuals")
-        .select("target_id, trips_count")
-        .in("target_id", targetIds);
+      // Get unique vendor IDs from targets
+      const vendorIds = [...new Set(targetsData?.map((t) => t.vendor_id) || [])];
 
-      if (actualsError) throw actualsError;
+      // Build date range for the selected month/year
+      const monthStart = startOfMonth(new Date(selectedYear, selectedMonth - 1));
+      const monthEnd = endOfMonth(new Date(selectedYear, selectedMonth - 1));
 
-      // Aggregate actuals by target
+      // Compute actuals from real dispatches:
+      // dispatch → vehicle (vendor_id) → partner
+      // dispatch → vehicle (truck_type, capacity_kg) → truck type
+      const { data: dispatchesData } = await supabase
+        .from("dispatches")
+        .select(`
+          id,
+          vehicles!inner(vendor_id, truck_type, capacity_kg)
+        `)
+        .gte("created_at", monthStart.toISOString())
+        .lte("created_at", monthEnd.toISOString())
+        .eq("status", "delivered");
+
+      // Count completed trips per vendor per truck type
       const actualsMap: Record<string, number> = {};
-      actualsData?.forEach((a) => {
-        actualsMap[a.target_id] = (actualsMap[a.target_id] || 0) + (a.trips_count || 1);
+
+      dispatchesData?.forEach((dispatch: any) => {
+        const partnerId = dispatch.vehicles?.vendor_id;
+        if (!partnerId || !vendorIds.includes(partnerId)) return;
+
+        // Determine truck type from vehicle's truck_type field or capacity_kg
+        const truckType =
+          normalizeTruckTypeStr(dispatch.vehicles?.truck_type) ||
+          capacityToTruckType(dispatch.vehicles?.capacity_kg);
+
+        if (!truckType) return;
+
+        const key = `${partnerId}|${truckType}`;
+        actualsMap[key] = (actualsMap[key] || 0) + 1;
       });
 
       // Build vendor progress map
@@ -102,7 +152,7 @@ const VendorTargetProgress = () => {
           };
         }
         vendorMap[vendorId].targets[target.truck_type] = target.target_trips;
-        vendorMap[vendorId].actuals[target.truck_type] = actualsMap[target.id] || 0;
+        vendorMap[vendorId].actuals[target.truck_type] = actualsMap[`${vendorId}|${target.truck_type}`] || 0;
       });
 
       setVendorProgress(Object.values(vendorMap));
