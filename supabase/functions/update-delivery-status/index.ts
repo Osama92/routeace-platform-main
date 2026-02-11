@@ -110,6 +110,13 @@ const handler = async (req: Request): Promise<Response> => {
 
     if (insertError) throw insertError;
 
+    // Fetch all delivery updates for timeline
+    const { data: allUpdates } = await supabase
+      .from("delivery_updates")
+      .select("status, location, notes, created_at")
+      .eq("dispatch_id", dispatch_id)
+      .order("created_at", { ascending: true });
+
     // Prepare email content
     const statusMessages: Record<string, string> = {
       assigned: "Your shipment has been assigned to a driver and will be picked up soon.",
@@ -136,6 +143,44 @@ const handler = async (req: Request): Promise<Response> => {
       const deliveryShort = (dispatch as any).delivery_address?.split(",")[0] || (dispatch as any).delivery_address;
       const currentLocation = location || "Not yet reported";
 
+      // Build shipment journey timeline HTML for emails
+      const statusLabels: Record<string, string> = {
+        assigned: "Assigned",
+        picked_up: "Picked Up",
+        in_transit: "In Transit",
+        delivered: "Delivered",
+        cancelled: "Cancelled",
+      };
+      const statusDotColors: Record<string, string> = {
+        delivered: "#10b981",
+        in_transit: "#f59e0b",
+        picked_up: "#3b82f6",
+        assigned: "#6366f1",
+        cancelled: "#ef4444",
+      };
+      const timelineHtml = (allUpdates && allUpdates.length > 0) ? `
+        <div style="margin: 20px 0;">
+          <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #374151;">Shipment Journey</h3>
+          ${allUpdates.map((u: any, i: number) => {
+            const label = statusLabels[u.status] || u.status.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+            const dateStr = new Date(u.created_at).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" });
+            const locationStr = u.location ? `<br/><span style="color:#6b7280;">📍 ${u.location}</span>` : "";
+            const notesStr = u.notes ? `<br/><span style="color:#6b7280;">📝 ${u.notes}</span>` : "";
+            const dotColor = statusDotColors[u.status] || "#9ca3af";
+            const line = i < allUpdates.length - 1 ? `<div style="width:2px;height:20px;background:#e5e7eb;margin:4px auto 0;"></div>` : "";
+            return `<div style="display:flex;gap:12px;margin-bottom:4px;">
+              <div style="display:flex;flex-direction:column;align-items:center;min-width:16px;">
+                <div style="width:12px;height:12px;border-radius:50%;background:${dotColor};flex-shrink:0;margin-top:4px;"></div>
+                ${line}
+              </div>
+              <div style="padding-bottom:8px;">
+                <strong style="color:#111827;">${label}</strong>${locationStr}${notesStr}
+                <br/><span style="font-size:12px;color:#9ca3af;">${dateStr}</span>
+              </div>
+            </div>`;
+          }).join("")}
+        </div>` : "";
+
       // Try to fetch the delivery_update email template from DB
       const { data: emailTemplate } = await supabase
         .from("email_templates")
@@ -158,6 +203,7 @@ const handler = async (req: Request): Promise<Response> => {
           pickup: (dispatch as any).pickup_address,
           delivery: (dispatch as any).delivery_address,
           current_location: currentLocation,
+          shipment_timeline: timelineHtml,
         };
 
         subject = emailTemplate.subject_template;
@@ -178,6 +224,14 @@ const handler = async (req: Request): Promise<Response> => {
           );
         }
 
+        // If the DB template doesn't contain {{shipment_timeline}}, inject timeline before "Best regards"
+        if (!emailTemplate.body_template.includes("{{shipment_timeline}}") && timelineHtml) {
+          body = body.replace(
+            /(<p>Best regards)/i,
+            `${timelineHtml}\n$1`
+          );
+        }
+
         // Fix branding
         body = body.replace(/RouteAce Logistics/g, "Glyde Systems");
       } else {
@@ -191,9 +245,17 @@ const handler = async (req: Request): Promise<Response> => {
           ? `\nCurrent Vehicle Location: ${location}`
           : "";
 
+        // Build plain text timeline
+        const textTimeline = (allUpdates && allUpdates.length > 0) ? "\n\n--- Shipment Journey ---\n" + allUpdates.map((u: any) => {
+          const label = statusLabels[u.status] || u.status.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
+          const dateStr = new Date(u.created_at).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" });
+          const loc = u.location ? ` | ${u.location}` : "";
+          return `• ${label}${loc} — ${dateStr}`;
+        }).join("\n") : "";
+
         body = `Dear ${customerName || "Customer"},\n\n${
           statusMessages[status] || `Status updated to: ${status}`
-        }\n\nDispatch Number: ${(dispatch as any).dispatch_number}${truckLine}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}${locationLine}\n\nThank you for your business.\n\nBest regards,\nGlyde Systems`;
+        }\n\nDispatch Number: ${(dispatch as any).dispatch_number}${truckLine}\nPickup: ${(dispatch as any).pickup_address}\nDelivery: ${(dispatch as any).delivery_address}${locationLine}${textTimeline}\n\nThank you for your business.\n\nBest regards,\nGlyde Systems`;
       }
 
       const htmlBody = emailTemplate ? body : body.replace(/\n/g, "<br/>");

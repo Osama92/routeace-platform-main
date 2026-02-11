@@ -41,6 +41,9 @@ import {
   Eye,
   FileText,
   Route,
+  Clock,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -74,6 +77,7 @@ import { AddressAutocomplete } from "@/components/shared/AddressAutocomplete";
 import FinancialDetailsForm from "@/components/transactions/FinancialDetailsForm";
 import HistoricalDataView, { HistoricalInvoiceData } from "@/components/dispatch/HistoricalDataView";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface Dropoff {
   id: string;
@@ -208,6 +212,15 @@ const priorityColors: Record<string, string> = {
   urgent: "bg-destructive/15 text-destructive",
 };
 
+const deliveryStatusConfig: Record<string, { icon: React.ElementType; color: string; label: string }> = {
+  pending: { icon: Clock, color: "text-muted-foreground", label: "Pending" },
+  assigned: { icon: Package, color: "text-info", label: "Assigned" },
+  picked_up: { icon: Package, color: "text-primary", label: "Picked Up" },
+  in_transit: { icon: Truck, color: "text-warning", label: "In Transit" },
+  delivered: { icon: CheckCircle, color: "text-success", label: "Delivered" },
+  cancelled: { icon: XCircle, color: "text-destructive", label: "Cancelled" },
+};
+
 const DispatchPage = () => {
   const [dispatches, setDispatches] = useState<Dispatch[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -227,6 +240,12 @@ const DispatchPage = () => {
   const [isFinancialFormOpen, setIsFinancialFormOpen] = useState(false);
   const [selectedDispatch, setSelectedDispatch] = useState<Dispatch | null>(null);
   const [detailDropoffs, setDetailDropoffs] = useState<Dropoff[]>([]);
+  const [deliveryUpdates, setDeliveryUpdates] = useState<{
+    status: string;
+    location: string | null;
+    notes: string | null;
+    created_at: string;
+  }[]>([]);
   const [dieselRates, setDieselRates] = useState<DieselRate[]>([]);
   const [matchedDieselRate, setMatchedDieselRate] = useState<DieselRate | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1620,6 +1639,13 @@ const DispatchPage = () => {
                         } else {
                           setHistoricalData(null);
                         }
+                        // Fetch delivery updates timeline
+                        const { data: updates } = await supabase
+                          .from("delivery_updates")
+                          .select("status, location, notes, created_at")
+                          .eq("dispatch_id", dispatch.id)
+                          .order("created_at", { ascending: false });
+                        setDeliveryUpdates(updates || []);
                         setIsDetailDialogOpen(true);
                       }}
                     >
@@ -1760,6 +1786,14 @@ const DispatchPage = () => {
                     } else {
                       setHistoricalData(null);
                     }
+
+                    // Fetch delivery updates timeline
+                    const { data: updates } = await supabase
+                      .from("delivery_updates")
+                      .select("status, location, notes, created_at")
+                      .eq("dispatch_id", dispatch.id)
+                      .order("created_at", { ascending: false });
+                    setDeliveryUpdates(updates || []);
 
                     setIsDetailDialogOpen(true);
                   }}
@@ -2117,6 +2151,55 @@ const DispatchPage = () => {
                     }))}
                     mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN}
                   />
+
+                  {/* Delivery Updates Timeline */}
+                  {deliveryUpdates.length > 0 && (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="font-heading text-lg flex items-center gap-2">
+                          <History className="w-5 h-5" />
+                          Delivery Updates
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-4">
+                          {deliveryUpdates.map((update, index) => {
+                            const config = deliveryStatusConfig[update.status] || { icon: Clock, color: "text-muted-foreground", label: update.status };
+                            const UpdateIcon = config.icon;
+                            return (
+                              <div key={index} className="flex gap-4">
+                                <div className="flex flex-col items-center">
+                                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${config.color} bg-secondary`}>
+                                    <UpdateIcon className="w-4 h-4" />
+                                  </div>
+                                  {index < deliveryUpdates.length - 1 && (
+                                    <div className="w-0.5 h-full bg-border mt-2" />
+                                  )}
+                                </div>
+                                <div className="flex-1 pb-4">
+                                  <p className="font-medium text-foreground">
+                                    {config.label}
+                                  </p>
+                                  {update.location && (
+                                    <p className="text-sm text-muted-foreground flex items-center gap-1">
+                                      <MapPin className="w-3 h-3" />
+                                      {update.location}
+                                    </p>
+                                  )}
+                                  {update.notes && (
+                                    <p className="text-sm text-muted-foreground mt-1">{update.notes}</p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    {new Date(update.created_at).toLocaleString()}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
 
                   {/* Fuel Planning Card */}
                   <FuelPlanningCard

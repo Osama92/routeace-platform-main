@@ -236,33 +236,65 @@ const FinancialDetailsForm = ({
     fetchVendors();
   }, []);
 
-  // Pre-fill from dispatch data
+  const [loadingExisting, setLoadingExisting] = useState(false);
+  const [resolvedExisting, setResolvedExisting] = useState<any | null>(existingTransaction || null);
+
+  // When dispatch changes, reset form completely then re-fill from dispatch + existing record
   useEffect(() => {
-    if (dispatch) {
-      const transactionDate = new Date();
-      form.setValue("customer_name", dispatch.customers?.company_name || "");
-      form.setValue("driver_name", dispatch.drivers?.full_name || "");
-      form.setValue("truck_number", dispatch.vehicles?.registration_number || "");
-      form.setValue("pickup_location", dispatch.pickup_address || "");
-      form.setValue("pick_off", dispatch.pickup_address || "");
-      form.setValue("delivery_location", dispatch.delivery_address || "");
-      form.setValue("drop_point", dispatch.delivery_address || "");
-      form.setValue("km_covered", dispatch.distance_km || null);
-      form.setValue("tonnage_loaded", dispatch.cargo_weight_kg || null);
-      form.setValue("transaction_date", transactionDate.toISOString().split("T")[0]);
-      form.setValue("period_month", transactionDate.getMonth() + 1);
-      form.setValue("period_year", transactionDate.getFullYear());
+    if (!dispatch) return;
 
-      // Auto-populate 3PL vendor if vehicle is a 3PL vehicle
-      if (dispatch.vehicles?.fleet_type === "3pl" && dispatch.vehicles?.vendor?.company_name) {
-        form.setValue("vendor_name", dispatch.vehicles.vendor.company_name);
-      }
+    // Reset ALL form fields to defaults first to prevent data bleed between dispatches
+    form.reset();
+
+    const transactionDate = new Date();
+    form.setValue("customer_name", dispatch.customers?.company_name || "");
+    form.setValue("driver_name", dispatch.drivers?.full_name || "");
+    form.setValue("truck_number", dispatch.vehicles?.registration_number || "");
+    form.setValue("pickup_location", dispatch.pickup_address || "");
+    form.setValue("pick_off", dispatch.pickup_address || "");
+    form.setValue("delivery_location", dispatch.delivery_address || "");
+    form.setValue("drop_point", dispatch.delivery_address || "");
+    form.setValue("km_covered", dispatch.distance_km || null);
+    form.setValue("tonnage_loaded", dispatch.cargo_weight_kg || null);
+    form.setValue("transaction_date", transactionDate.toISOString().split("T")[0]);
+    form.setValue("period_month", transactionDate.getMonth() + 1);
+    form.setValue("period_year", transactionDate.getFullYear());
+
+    // Auto-populate 3PL vendor if vehicle is a 3PL vehicle
+    if (dispatch.vehicles?.fleet_type === "3pl" && dispatch.vehicles?.vendor?.company_name) {
+      form.setValue("vendor_name", dispatch.vehicles.vendor.company_name);
     }
-  }, [dispatch, form]);
 
-  // Pre-fill from existing transaction (edit mode)
+    // If no existingTransaction was passed, try to find one for this dispatch
+    if (!existingTransaction && dispatch.id) {
+      setLoadingExisting(true);
+      supabase
+        .from("historical_invoice_data")
+        .select("*")
+        .eq("dispatch_id", dispatch.id)
+        .order("imported_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then(({ data }) => {
+          setResolvedExisting(data || null);
+          if (data) {
+            Object.keys(data).forEach((key) => {
+              if (key in form.getValues()) {
+                form.setValue(key as keyof FormValues, data[key]);
+              }
+            });
+          }
+          setLoadingExisting(false);
+        });
+    } else {
+      setResolvedExisting(existingTransaction || null);
+    }
+  }, [dispatch, form, existingTransaction]);
+
+  // Pre-fill from existing transaction passed as prop (edit mode)
   useEffect(() => {
     if (existingTransaction) {
+      setResolvedExisting(existingTransaction);
       Object.keys(existingTransaction).forEach((key) => {
         if (key in form.getValues()) {
           form.setValue(key as keyof FormValues, existingTransaction[key]);
@@ -345,17 +377,17 @@ const FinancialDetailsForm = ({
       };
 
       let transactionId: string | null = null;
-      const isNewTransaction = !existingTransaction?.id;
+      const isNewTransaction = !resolvedExisting?.id;
 
-      if (existingTransaction?.id) {
+      if (resolvedExisting?.id) {
         // Update existing
         const { error } = await supabase
           .from("historical_invoice_data")
           .update(transactionData)
-          .eq("id", existingTransaction.id);
+          .eq("id", resolvedExisting.id);
 
         if (error) throw error;
-        transactionId = existingTransaction.id;
+        transactionId = resolvedExisting.id;
         toast.success("Transaction updated successfully");
       } else {
         // Insert new and get the ID
@@ -367,6 +399,8 @@ const FinancialDetailsForm = ({
 
         if (error) throw error;
         transactionId = insertedData?.id || null;
+        // Mark as existing so subsequent saves use UPDATE instead of creating duplicates
+        setResolvedExisting({ id: transactionId });
         toast.success("Transaction created successfully");
       }
 
