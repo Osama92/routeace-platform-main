@@ -3,7 +3,6 @@ import { MapPin, Clock, Truck, MoreVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { Link } from "react-router-dom";
-import { formatDistanceToNow } from "date-fns";
 
 type DispatchStatus = "pending" | "assigned" | "in_transit" | "delivered" | "cancelled";
 
@@ -13,9 +12,10 @@ interface Dispatch {
   pickup_address: string;
   delivery_address: string;
   status: DispatchStatus;
-  scheduled_delivery: string | null;
+  total_distance_km: number | null;
   distance_km: number | null;
   drivers: { full_name: string } | null;
+  routes: { estimated_duration_hours: number | null } | null;
 }
 
 const statusLabels: Record<DispatchStatus, string> = {
@@ -46,9 +46,10 @@ const RecentShipments = () => {
           pickup_address,
           delivery_address,
           status,
-          scheduled_delivery,
+          total_distance_km,
           distance_km,
-          drivers:driver_id (full_name)
+          drivers:driver_id (full_name),
+          routes:route_id (estimated_duration_hours)
         `)
         .order("created_at", { ascending: false })
         .limit(5);
@@ -61,16 +62,17 @@ const RecentShipments = () => {
   const getEtaDisplay = (dispatch: Dispatch) => {
     if (dispatch.status === "delivered") return "Completed";
     if (dispatch.status === "cancelled") return "Cancelled";
-    if (!dispatch.scheduled_delivery) return "Not scheduled";
 
-    const scheduledDate = new Date(dispatch.scheduled_delivery);
-    const now = new Date();
+    const etaDays = (dispatch.routes as any)?.estimated_duration_hours;
+    if (etaDays) return `${etaDays} ${etaDays === 1 ? "day" : "days"}`;
 
-    if (scheduledDate < now && dispatch.status !== "delivered") {
-      return "Overdue";
-    }
+    return "—";
+  };
 
-    return formatDistanceToNow(scheduledDate, { addSuffix: false });
+  const getTotalDistance = (dispatch: Dispatch) => {
+    const dist = dispatch.total_distance_km ?? (dispatch.distance_km ? dispatch.distance_km * 2 : null);
+    if (!dist) return "—";
+    return `${dist.toLocaleString()} km`;
   };
 
   // Mobile card view component
@@ -101,9 +103,7 @@ const RecentShipments = () => {
             {getEtaDisplay(shipment)}
           </div>
         </div>
-        {shipment.distance_km && (
-          <p className="text-muted-foreground">{shipment.distance_km} km</p>
-        )}
+        <p className="text-muted-foreground">{getTotalDistance(shipment)}</p>
       </div>
     </div>
   );
@@ -221,7 +221,7 @@ const RecentShipments = () => {
                   </td>
                   <td className="py-3 px-4">
                     <span className="text-sm text-foreground">
-                      {shipment.distance_km ? `${shipment.distance_km} km` : "—"}
+                      {getTotalDistance(shipment)}
                     </span>
                   </td>
                   <td className="py-3 px-4 text-right">

@@ -1076,7 +1076,7 @@ const DispatchPage = () => {
         distance_km: selectedDispatch.distance_km,
       };
 
-      const updateData = {
+      const updateData: Record<string, any> = {
         pickup_address: editFormData.pickup_address,
         delivery_address: editFormData.delivery_address,
         cargo_description: editFormData.cargo_description || null,
@@ -1092,6 +1092,11 @@ const DispatchPage = () => {
         date_loaded: editFormData.date_loaded || null,
         delivery_commenced_at: editFormData.delivery_commenced_at || null,
       };
+
+      // Include customer_id if admin changed it
+      if (editFormData.customer_id) {
+        updateData.customer_id = editFormData.customer_id;
+      }
 
       // Update dispatch
       const { error: updateError } = await supabase
@@ -2241,6 +2246,34 @@ const DispatchPage = () => {
           </DialogHeader>
           <div className="flex-1 overflow-y-auto pr-2 -mr-2">
           <div className="grid gap-4 py-4">
+            {/* Customer field — admin only, editable before delivery */}
+            {userRole === "admin" && selectedDispatch?.status !== "delivered" && (
+              <div className="space-y-2">
+                <Label>Customer</Label>
+                <Select
+                  value={editFormData.customer_id}
+                  onValueChange={(customerId) => {
+                    const customer = customers.find(c => c.id === customerId);
+                    setEditFormData(prev => ({
+                      ...prev,
+                      customer_id: customerId,
+                      pickup_address: customer?.factory_address || prev.pickup_address,
+                    }));
+                  }}
+                >
+                  <SelectTrigger className="bg-secondary/50">
+                    <SelectValue placeholder="Select customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {customers.map((customer) => (
+                      <SelectItem key={customer.id} value={customer.id}>
+                        {customer.company_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="edit_pickup_address">Pickup Address *</Label>

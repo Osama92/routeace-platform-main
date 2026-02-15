@@ -36,6 +36,7 @@ import {
   Trash2,
   Eye,
   Loader2,
+  Pencil,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -97,6 +98,22 @@ const RoutesPage = () => {
   });
 
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+
+  // Edit route state
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    name: "",
+    origin: "",
+    origin_lat: null as number | null,
+    origin_lng: null as number | null,
+    destination: "",
+    destination_lat: null as number | null,
+    destination_lng: null as number | null,
+    distance_km: "",
+    estimated_duration_hours: "",
+  });
+  const [editWaypoints, setEditWaypoints] = useState<Waypoint[]>([]);
+  const [editingRoute, setEditingRoute] = useState<RouteData | null>(null);
 
   const canManage = hasAnyRole(["admin", "operations"]);
 
@@ -229,7 +246,7 @@ const RoutesPage = () => {
 
       toast({
         title: "Distance Calculated",
-        description: `Total: ${data.total_distance_km} km, ~${data.total_duration_hours.toFixed(1)} hours`,
+        description: `Total: ${data.total_distance_km} km, ~${Math.ceil(data.total_duration_hours / 24)} day(s)`,
       });
     } catch (error: any) {
       toast({
@@ -380,6 +397,118 @@ const RoutesPage = () => {
   const viewRouteDetails = (route: RouteData) => {
     setSelectedRoute(route);
     setIsViewDialogOpen(true);
+  };
+
+  const openEditDialog = (route: RouteData) => {
+    setEditingRoute(route);
+    setEditFormData({
+      name: route.name,
+      origin: route.origin,
+      origin_lat: route.origin_lat,
+      origin_lng: route.origin_lng,
+      destination: route.destination,
+      destination_lat: route.destination_lat,
+      destination_lng: route.destination_lng,
+      distance_km: route.distance_km?.toString() || "",
+      estimated_duration_hours: route.estimated_duration_hours?.toString() || "",
+    });
+    setEditWaypoints(route.waypoints || []);
+    setIsEditDialogOpen(true);
+  };
+
+  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setEditFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleEditSubmit = async () => {
+    if (!editingRoute) return;
+    if (!editFormData.name || !editFormData.origin || !editFormData.destination) {
+      toast({
+        title: "Validation Error",
+        description: "Please fill in all required fields",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const oldData = {
+        name: editingRoute.name,
+        origin: editingRoute.origin,
+        destination: editingRoute.destination,
+        distance_km: editingRoute.distance_km,
+        estimated_duration_hours: editingRoute.estimated_duration_hours,
+      };
+
+      const { error } = await supabase
+        .from("routes")
+        .update({
+          name: editFormData.name,
+          origin: editFormData.origin,
+          origin_lat: editFormData.origin_lat,
+          origin_lng: editFormData.origin_lng,
+          destination: editFormData.destination,
+          destination_lat: editFormData.destination_lat,
+          destination_lng: editFormData.destination_lng,
+          distance_km: editFormData.distance_km ? parseFloat(editFormData.distance_km) : null,
+          estimated_duration_hours: editFormData.estimated_duration_hours
+            ? parseFloat(editFormData.estimated_duration_hours)
+            : null,
+        })
+        .eq("id", editingRoute.id);
+
+      if (error) throw error;
+
+      // Update waypoints: delete existing, insert new
+      await supabase.from("route_waypoints").delete().eq("route_id", editingRoute.id);
+
+      if (editWaypoints.length > 0) {
+        const waypointsToInsert = editWaypoints.map((wp) => ({
+          route_id: editingRoute.id,
+          location_name: wp.location_name,
+          address: wp.address,
+          latitude: wp.latitude,
+          longitude: wp.longitude,
+          sequence_order: wp.sequence_order,
+          distance_from_previous_km: wp.distance_from_previous_km,
+          duration_from_previous_hours: wp.duration_from_previous_hours,
+          sla_hours: wp.sla_hours,
+        }));
+
+        await supabase.from("route_waypoints").insert(waypointsToInsert);
+      }
+
+      await logChange({
+        table_name: "routes",
+        record_id: editingRoute.id,
+        action: "update",
+        old_data: oldData,
+        new_data: {
+          name: editFormData.name,
+          origin: editFormData.origin,
+          destination: editFormData.destination,
+          distance_km: editFormData.distance_km ? parseFloat(editFormData.distance_km) : null,
+          estimated_duration_hours: editFormData.estimated_duration_hours
+            ? parseFloat(editFormData.estimated_duration_hours)
+            : null,
+        },
+      });
+
+      toast({ title: "Success", description: "Route updated successfully" });
+      setIsEditDialogOpen(false);
+      setEditingRoute(null);
+      fetchRoutes();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update route",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filteredRoutes = routes.filter(
@@ -665,17 +794,17 @@ const RoutesPage = () => {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="estimated_duration_hours">Est. Duration (hours)</Label>
+                    <Label htmlFor="estimated_duration_hours">ETA (days)</Label>
                     <Input
                       id="estimated_duration_hours"
                       name="estimated_duration_hours"
                       type="number"
-                      step="0.5"
+                      step="1"
+                      min="1"
                       value={formData.estimated_duration_hours}
                       onChange={handleInputChange}
-                      placeholder="Auto-calculated"
+                      placeholder="e.g., 2"
                       className="bg-secondary/50"
-                      readOnly
                     />
                   </div>
                 </div>
@@ -707,7 +836,7 @@ const RoutesPage = () => {
               <TableHead className="text-muted-foreground">Stops</TableHead>
               <TableHead className="text-muted-foreground">Destination</TableHead>
               <TableHead className="text-muted-foreground">Distance</TableHead>
-              <TableHead className="text-muted-foreground">Duration</TableHead>
+              <TableHead className="text-muted-foreground">ETA</TableHead>
               <TableHead className="text-muted-foreground">Status</TableHead>
               <TableHead className="text-muted-foreground w-10"></TableHead>
             </TableRow>
@@ -768,7 +897,7 @@ const RoutesPage = () => {
                     {route.estimated_duration_hours ? (
                       <div className="flex items-center gap-2 text-muted-foreground">
                         <Clock className="w-4 h-4" />
-                        {route.estimated_duration_hours}h
+                        {route.estimated_duration_hours} {route.estimated_duration_hours === 1 ? "day" : "days"}
                       </div>
                     ) : (
                       <span className="text-muted-foreground/50">—</span>
@@ -795,9 +924,15 @@ const RoutesPage = () => {
                       >
                         <Eye className="w-4 h-4" />
                       </Button>
-                      <Button variant="ghost" size="icon">
-                        <MoreVertical className="w-4 h-4" />
-                      </Button>
+                      {canManage && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEditDialog(route)}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -865,9 +1000,9 @@ const RoutesPage = () => {
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Est. Duration</p>
+                    <p className="text-sm text-muted-foreground">ETA</p>
                     <p className="text-xl font-bold text-foreground">
-                      {selectedRoute.estimated_duration_hours || "—"} hours
+                      {selectedRoute.estimated_duration_hours || "—"} {selectedRoute.estimated_duration_hours === 1 ? "day" : "days"}
                     </p>
                   </div>
                 </div>
@@ -879,6 +1014,201 @@ const RoutesPage = () => {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Route Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
+        setIsEditDialogOpen(open);
+        if (!open) setEditingRoute(null);
+      }}>
+        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-heading">Edit Route</DialogTitle>
+            <DialogDescription>
+              Update route details, stops, and ETA.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit_name">Route Name *</Label>
+              <Input
+                id="edit_name"
+                name="name"
+                value={editFormData.name}
+                onChange={handleEditInputChange}
+                placeholder="Lagos - Abuja Express"
+                className="bg-secondary/50"
+              />
+            </div>
+
+            {/* Origin */}
+            <div className="space-y-2">
+              <Label>Origin *</Label>
+              <AddressAutocomplete
+                value={editFormData.origin}
+                onChange={(value) => setEditFormData((prev) => ({ ...prev, origin: value }))}
+                onPlaceSelect={(place) => {
+                  setEditFormData((prev) => ({
+                    ...prev,
+                    origin: place.formattedAddress,
+                    origin_lat: place.lat,
+                    origin_lng: place.lng,
+                  }));
+                }}
+                placeholder="Start location"
+              />
+            </div>
+
+            {/* Waypoints */}
+            {editWaypoints.length > 0 && (
+              <div className="space-y-3">
+                <Label>Intermediate Stops</Label>
+                {editWaypoints.map((wp, index) => (
+                  <div key={index} className="p-3 bg-secondary/30 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-muted-foreground">
+                        Stop {index + 1}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => {
+                          setEditWaypoints((prev) =>
+                            prev.filter((_, i) => i !== index).map((w, i) => ({ ...w, sequence_order: i + 1 }))
+                          );
+                        }}
+                      >
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                    <Input
+                      placeholder="Location name (e.g., Ibadan Depot)"
+                      value={wp.location_name}
+                      onChange={(e) => {
+                        setEditWaypoints((prev) =>
+                          prev.map((w, i) => (i === index ? { ...w, location_name: e.target.value } : w))
+                        );
+                      }}
+                      className="bg-background"
+                    />
+                    <AddressAutocomplete
+                      value={wp.address}
+                      onChange={(value) => {
+                        setEditWaypoints((prev) =>
+                          prev.map((w, i) => (i === index ? { ...w, address: value } : w))
+                        );
+                      }}
+                      onPlaceSelect={(place) => {
+                        setEditWaypoints((prev) =>
+                          prev.map((w, i) =>
+                            i === index
+                              ? { ...w, address: place.formattedAddress, latitude: place.lat, longitude: place.lng }
+                              : w
+                          )
+                        );
+                      }}
+                      placeholder="Stop address"
+                    />
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Label className="text-xs">SLA (hours)</Label>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          placeholder="Expected delivery time"
+                          value={wp.sla_hours || ""}
+                          onChange={(e) => {
+                            setEditWaypoints((prev) =>
+                              prev.map((w, i) =>
+                                i === index
+                                  ? { ...w, sla_hours: e.target.value ? parseFloat(e.target.value) : undefined }
+                                  : w
+                              )
+                            );
+                          }}
+                          className="bg-background"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setEditWaypoints((prev) => [
+                  ...prev,
+                  { location_name: "", address: "", sequence_order: prev.length + 1 },
+                ]);
+              }}
+              className="w-full"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Stop
+            </Button>
+
+            {/* Destination */}
+            <div className="space-y-2">
+              <Label>Destination *</Label>
+              <AddressAutocomplete
+                value={editFormData.destination}
+                onChange={(value) =>
+                  setEditFormData((prev) => ({ ...prev, destination: value }))
+                }
+                onPlaceSelect={(place) => {
+                  setEditFormData((prev) => ({
+                    ...prev,
+                    destination: place.formattedAddress,
+                    destination_lat: place.lat,
+                    destination_lng: place.lng,
+                  }));
+                }}
+                placeholder="End location"
+              />
+            </div>
+
+            {/* Distance and ETA */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit_distance_km">Distance (km)</Label>
+                <Input
+                  id="edit_distance_km"
+                  name="distance_km"
+                  type="number"
+                  value={editFormData.distance_km}
+                  onChange={handleEditInputChange}
+                  placeholder="e.g., 580"
+                  className="bg-secondary/50"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_eta">ETA (days)</Label>
+                <Input
+                  id="edit_eta"
+                  name="estimated_duration_hours"
+                  type="number"
+                  step="1"
+                  min="1"
+                  value={editFormData.estimated_duration_hours}
+                  onChange={handleEditInputChange}
+                  placeholder="e.g., 2"
+                  className="bg-secondary/50"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleEditSubmit} disabled={saving}>
+              {saving ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </DashboardLayout>

@@ -38,6 +38,7 @@ const Dashboard = () => {
   const [kpis, setKpis] = useState({
     activeShipments: 0,
     onTimeRate: 0,
+    avgEtaDays: 0,
     fleetUtilizationText: "—",
     totalDistanceKm: 0,
     revenueMtd: 0,
@@ -80,19 +81,21 @@ const Dashboard = () => {
         revenueMtd = (invoices || []).reduce((sum, r: any) => sum + Number(r.total_amount || 0), 0);
       }
 
-      // Distance MTD (sum delivered dispatches this month) - primary source
-      // Using total_distance_km which includes return distance, falling back to distance_km
-      // Filter by updated_at since that's when the dispatch was marked as delivered
-      const { data: delivered } = await supabase
+      // Distance MTD — sum of total_distance_km (To & Fro) for ALL dispatches
+      // created this month (regardless of status), excluding historical imports.
+      // total_distance_km = distance_km * 2 (set at dispatch creation/edit)
+      // Falls back to distance_km * 2 for older dispatches where total_distance_km is null
+      const { data: allDispatches } = await supabase
         .from("dispatches")
-        .select("distance_km, total_distance_km, cost")
-        .eq("status", "delivered")
-        .gte("updated_at", start);
+        .select("total_distance_km, distance_km, cost")
+        .neq("is_historical", true)
+        .gte("created_at", start);
 
-      // Calculate total distance from dispatches (authoritative source)
-      // Prefer total_distance_km (includes return), fall back to distance_km
-      let totalDistanceKm = (delivered || []).reduce((sum, r: any) =>
-        sum + Number(r.total_distance_km || r.distance_km || 0), 0);
+      // Sum Total Distance (To & Fro) for all dispatches created this month
+      let totalDistanceKm = (allDispatches || []).reduce((sum, r: any) => {
+        const dist = r.total_distance_km ?? (r.distance_km ? Number(r.distance_km) * 2 : 0);
+        return sum + Number(dist);
+      }, 0);
 
       // If no dispatch distance data, try historical_invoice_data as fallback
       if (totalDistanceKm === 0 && transactions && transactions.length > 0) {
@@ -110,40 +113,61 @@ const Dashboard = () => {
       if (totalCostMtd > 0 && totalDistanceKm > 0) {
         avgCostPerKm = totalCostMtd / totalDistanceKm;
       } else {
-        const totalCost = (delivered || []).reduce((sum, r: any) => sum + Number(r.cost || 0), 0);
+        const totalCost = (allDispatches || []).reduce((sum, r: any) => sum + Number(r.cost || 0), 0);
         avgCostPerKm = totalDistanceKm > 0 ? totalCost / totalDistanceKm : 0;
       }
 
-      // On-Time Delivery (OTD) - based on transit days with 2-day target
-      // A delivery is "on-time" if days in transit (from date_loaded to delivery_commenced_at) <= 2 days
-      const OTD_TARGET_DAYS = 2;
+      // On-Time Delivery (OTD) - based on per-dispatch route ETA days
+      // A delivery is "on-time" if days in transit <= the route's ETA (days)
+      // Falls back to 2 days if no route ETA is set
+      const DEFAULT_ETA_DAYS = 2;
 
-      // Get all delivered dispatches this month that have transit date data
+      // Get all delivered dispatches this month with route ETA
       const { data: deliveredWithDates } = await supabase
         .from("dispatches")
-        .select("id, date_loaded, delivery_commenced_at, actual_delivery")
+        .select("id, date_loaded, delivery_commenced_at, actual_delivery, routes:route_id (estimated_duration_hours)")
         .eq("status", "delivered")
-        .gte("updated_at", start);
+        .gte("created_at", start);
 
-      // Calculate OTD rate
+      // Calculate OTD rate using per-dispatch route ETA
       let onTimeCount = 0;
       let totalWithTransitData = 0;
 
       (deliveredWithDates || []).forEach((dispatch: any) => {
-        // Use delivery_commenced_at if available, otherwise fall back to actual_delivery
         const startDate = dispatch.date_loaded;
         const endDate = dispatch.delivery_commenced_at || dispatch.actual_delivery;
+        const routeEtaDays = dispatch.routes?.estimated_duration_hours;
 
         if (startDate && endDate) {
           totalWithTransitData++;
           const daysInTransit = Math.ceil(
             (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)
           );
-          if (daysInTransit <= OTD_TARGET_DAYS) {
+          // Use dispatch's route ETA days as target, fall back to default
+          const targetDays = routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS;
+          if (daysInTransit <= targetDays) {
             onTimeCount++;
           }
         }
       });
+
+      // Compute average ETA days from ALL non-cancelled dispatches created this month
+      const { data: allDispatchesWithEta } = await supabase
+        .from("dispatches")
+        .select("routes:route_id (estimated_duration_hours)")
+        .gte("created_at", start)
+        .not("status", "eq", "cancelled");
+
+      let avgEtaTotal = 0;
+      let avgEtaCount = 0;
+      (allDispatchesWithEta || []).forEach((d: any) => {
+        const eta = d.routes?.estimated_duration_hours;
+        if (eta) {
+          avgEtaTotal += Number(eta);
+          avgEtaCount++;
+        }
+      });
+      const avgEtaDays = avgEtaCount > 0 ? Math.round((avgEtaTotal / avgEtaCount) * 10) / 10 : DEFAULT_ETA_DAYS;
 
       // If no transit data available, fall back to completion rate
       let onTimeRate = 0;
@@ -191,6 +215,7 @@ const Dashboard = () => {
       setKpis({
         activeShipments: activeCount || 0,
         onTimeRate,
+        avgEtaDays,
         fleetUtilizationText,
         totalDistanceKm,
         revenueMtd,
@@ -214,9 +239,9 @@ const Dashboard = () => {
           isFinancial: false,
         },
         {
-          title: "OTD Rate (≤2 days)",
+          title: `OTD Rate (avg ${kpis.avgEtaDays}d)`,
           value: `${kpis.onTimeRate.toFixed(1)}%`,
-          change: "Target: 2-day transit",
+          change: `Avg ETA: ${kpis.avgEtaDays} day${kpis.avgEtaDays !== 1 ? "s" : ""}`,
           changeType: kpis.onTimeRate >= 80 ? "positive" as const : kpis.onTimeRate >= 50 ? "neutral" as const : "negative" as const,
           icon: Clock,
           link: "/dispatch",
