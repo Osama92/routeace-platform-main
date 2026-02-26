@@ -41,6 +41,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null);
   const [suspensionReason, setSuspensionReason] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  // Tracks whether SIGNED_IN event already created a session record, so the
+  // subsequent getSession() call does not create a duplicate on page load.
+  const sessionCreatedByEventRef = useRef(false);
 
   const isApproved = approvalStatus === "approved";
 
@@ -172,10 +175,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         if (event === "SIGNED_IN" && session?.user) {
           // Defer session creation with setTimeout to avoid deadlock
           setTimeout(async () => {
-            const newSessionId = await createSessionRecord(session.user.id);
-            if (newSessionId) {
-              sessionIdRef.current = newSessionId;
-              setCurrentSessionId(newSessionId);
+            // Only create a session record for a genuine new login, not token refresh
+            if (!sessionIdRef.current) {
+              const newSessionId = await createSessionRecord(session.user.id);
+              if (newSessionId) {
+                sessionIdRef.current = newSessionId;
+                setCurrentSessionId(newSessionId);
+                sessionCreatedByEventRef.current = true;
+              }
             }
             const role = await fetchUserRole(session.user.id);
             setUserRole(role);
@@ -208,16 +215,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     );
 
-    // THEN check for existing session
+    // THEN check for existing session (page refresh / initial load)
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        // Create session record for existing session if not already tracked
-        const newSessionId = await createSessionRecord(session.user.id);
-        if (newSessionId) {
-          sessionIdRef.current = newSessionId;
-          setCurrentSessionId(newSessionId);
+        // Only create a session record if the SIGNED_IN event hasn't already done so.
+        // On a page refresh Supabase fires INITIAL_SESSION (not SIGNED_IN), so we
+        // create the record here. On a fresh login, SIGNED_IN fires first and sets
+        // sessionCreatedByEventRef so we skip creation here to avoid duplicates.
+        if (!sessionCreatedByEventRef.current && !sessionIdRef.current) {
+          const newSessionId = await createSessionRecord(session.user.id);
+          if (newSessionId) {
+            sessionIdRef.current = newSessionId;
+            setCurrentSessionId(newSessionId);
+          }
         }
         const role = await fetchUserRole(session.user.id);
         setUserRole(role);

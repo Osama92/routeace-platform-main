@@ -64,13 +64,47 @@ interface HourlyData {
   active_users: number;
 }
 
+interface UserDurationSummary {
+  user_id: string;
+  user_full_name: string;
+  user_email: string;
+  total_sessions: number;
+  total_minutes: number;
+  avg_minutes: number;
+}
+
 const SessionAnalytics = () => {
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [dailySummary, setDailySummary] = useState<DailySummary[]>([]);
   const [hourlyData, setHourlyData] = useState<HourlyData[]>([]);
+  const [userDurations, setUserDurations] = useState<UserDurationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [dateRange, setDateRange] = useState("14");
   const { toast } = useToast();
+
+  // Returns effective duration in minutes.
+  // - Ended sessions: use the stored session_duration_minutes.
+  // - Sessions started within the last 8 hours with no logout: they are genuinely
+  //   still active, so compute elapsed time from login_at to now.
+  // - Older sessions with no logout_at: treat as 0 — these are zombie records from
+  //   browser crashes / tab closes where the unload beacon failed. Including them
+  //   would inflate totals drastically (e.g. a session from 3 days ago would add
+  //   4320 minutes to the sum).
+  const MAX_ACTIVE_SESSION_HOURS = 8;
+  const getEffectiveDuration = (session: SessionData): number => {
+    if (session.session_duration_minutes != null) {
+      return session.session_duration_minutes;
+    }
+    if (session.login_at && !session.logout_at) {
+      const elapsedMinutes = Math.round((Date.now() - new Date(session.login_at).getTime()) / 60000);
+      if (elapsedMinutes <= MAX_ACTIVE_SESSION_HOURS * 60) {
+        return elapsedMinutes;
+      }
+      // Stale unclosed session — cap to avoid inflating totals
+      return 0;
+    }
+    return 0;
+  };
 
   // KPI stats
   const [stats, setStats] = useState({
@@ -126,13 +160,23 @@ const SessionAnalytics = () => {
         return loginDate >= todayStart && loginDate <= todayEnd;
       });
 
-      const activeUsers = enrichedSessions.filter(s => !s.logout_at).length;
+      // Only count sessions as "active" if they have no logout and were started
+      // within the last MAX_ACTIVE_SESSION_HOURS (avoids zombie records counting)
+      const activeUsers = enrichedSessions.filter(s => {
+        if (s.logout_at) return false;
+        if (!s.login_at) return false;
+        const elapsedMinutes = (Date.now() - new Date(s.login_at).getTime()) / 60000;
+        return elapsedMinutes <= MAX_ACTIVE_SESSION_HOURS * 60;
+      }).length;
 
-      const totalMinutesToday = todaySessions.reduce((acc, s) => 
-        acc + (s.session_duration_minutes || 0), 0);
-      
-      const avgDuration = todaySessions.length > 0 
-        ? totalMinutesToday / todaySessions.length 
+      // Use effective duration (elapsed time for active sessions, stored value for ended)
+      // Only include sessions that have measurable duration (> 0) in the average
+      const sessionsWithDuration = todaySessions.filter(s => getEffectiveDuration(s) > 0);
+      const totalMinutesToday = sessionsWithDuration.reduce((acc, s) =>
+        acc + getEffectiveDuration(s), 0);
+
+      const avgDuration = sessionsWithDuration.length > 0
+        ? totalMinutesToday / sessionsWithDuration.length
         : 0;
 
       setStats({
@@ -155,21 +199,51 @@ const SessionAnalytics = () => {
       const summaries: DailySummary[] = [];
       dailyMap.forEach((value, date) => {
         const uniqueUsers = new Set(value.sessions.map(s => s.user_id)).size;
-        const totalMinutes = value.sessions.reduce((acc, s) => 
-          acc + (s.session_duration_minutes || 0), 0);
+        const sessionsWithDur = value.sessions.filter(s => getEffectiveDuration(s) > 0);
+        const totalMinutes = sessionsWithDur.reduce((acc, s) =>
+          acc + getEffectiveDuration(s), 0);
         summaries.push({
           date,
           total_sessions: value.sessions.length,
           unique_users: uniqueUsers,
           total_hours: Math.round(totalMinutes / 60 * 10) / 10,
-          avg_duration: value.sessions.length > 0 
-            ? Math.round(totalMinutes / value.sessions.length) 
+          avg_duration: sessionsWithDur.length > 0
+            ? Math.round(totalMinutes / sessionsWithDur.length)
             : 0,
         });
       });
 
       summaries.sort((a, b) => a.date.localeCompare(b.date));
       setDailySummary(summaries);
+
+      // Compute duration per user across the selected date range
+      const userMap = new Map<string, { sessions: SessionData[]; name: string; email: string }>();
+      enrichedSessions.forEach(session => {
+        if (!userMap.has(session.user_id)) {
+          userMap.set(session.user_id, {
+            sessions: [],
+            name: session.user_full_name || "Unknown",
+            email: session.user_email || "Unknown",
+          });
+        }
+        userMap.get(session.user_id)!.sessions.push(session);
+      });
+
+      const userDurationList: UserDurationSummary[] = [];
+      userMap.forEach((value, userId) => {
+        const sessionsWithDur = value.sessions.filter(s => getEffectiveDuration(s) > 0);
+        const totalMins = sessionsWithDur.reduce((acc, s) => acc + getEffectiveDuration(s), 0);
+        userDurationList.push({
+          user_id: userId,
+          user_full_name: value.name,
+          user_email: value.email,
+          total_sessions: value.sessions.length,
+          total_minutes: totalMins,
+          avg_minutes: sessionsWithDur.length > 0 ? Math.round(totalMins / sessionsWithDur.length) : 0,
+        });
+      });
+      userDurationList.sort((a, b) => b.total_minutes - a.total_minutes);
+      setUserDurations(userDurationList);
 
       // Calculate hourly activity for today
       const hourlyMap = new Map<number, number>();
@@ -544,6 +618,71 @@ const SessionAnalytics = () => {
           </Card>
         </motion.div>
       </div>
+
+      {/* Duration per User Table */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.9 }}
+        className="mt-6"
+      >
+        <Card className="glass-card">
+          <CardHeader>
+            <CardTitle className="font-heading flex items-center gap-2">
+              <Timer className="w-5 h-5 text-info" />
+              Duration per User
+            </CardTitle>
+            <CardDescription>Total and average session time per user for the selected period</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Sessions</TableHead>
+                    <TableHead>Total Time</TableHead>
+                    <TableHead>Avg Duration</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {loading ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center py-8">
+                        Loading user durations...
+                      </TableCell>
+                    </TableRow>
+                  ) : userDurations.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                        No data available
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    userDurations.map((ud) => (
+                      <TableRow key={ud.user_id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-medium text-sm">{ud.user_full_name}</p>
+                            <p className="text-xs text-muted-foreground">{ud.user_email}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-sm">{ud.total_sessions}</TableCell>
+                        <TableCell className="text-sm font-medium">
+                          {formatDuration(ud.total_minutes)}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDuration(ud.avg_minutes)}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
     </DashboardLayout>
   );
 };

@@ -85,194 +85,210 @@ const InvoiceTemplate = forwardRef<HTMLDivElement, InvoiceTemplateProps>(
     ref
   ) => {
     const displayBalanceDue = balanceDue ?? total;
+    const baseSubtotal = taxType === "inclusive" ? subtotal - vatAmount : subtotal;
 
     return (
       <div
         ref={ref}
-        className="bg-white text-gray-900 p-8 max-w-[800px] mx-auto font-sans"
-        style={{ fontFamily: "Arial, sans-serif" }}
+        style={{
+          fontFamily: "Arial, Helvetica, sans-serif",
+          backgroundColor: "#ffffff",
+          color: "#1a1a1a",
+          padding: "40px 48px",
+          maxWidth: "800px",
+          margin: "0 auto",
+          fontSize: "13px",
+          lineHeight: "1.4",
+        }}
       >
-        {/* Header Section */}
-        <div className="flex justify-between items-start mb-8">
-          {/* Company Logo */}
-          <div className="flex-shrink-0">
+        {/* ── TOP HEADER: Logo left │ Invoice title + balance right ── */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "32px" }}>
+          {/* Logo – left */}
+          <div style={{ flexShrink: 0 }}>
             {companyProfile?.company_logo ? (
               <img
                 src={companyProfile.company_logo}
                 alt="Company Logo"
-                className="max-w-[180px] max-h-[100px] object-contain"
+                style={{ maxWidth: "160px", maxHeight: "110px", objectFit: "contain", display: "block" }}
               />
             ) : (
-              <div className="w-[120px] h-[80px] bg-gradient-to-br from-orange-400 to-orange-600 rounded-lg flex items-center justify-center">
-                <span className="text-white text-2xl font-bold">
+              <div
+                style={{
+                  width: "110px",
+                  height: "90px",
+                  background: "linear-gradient(135deg, #f97316 0%, #ea580c 100%)",
+                  borderRadius: "12px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <span style={{ color: "#fff", fontSize: "36px", fontWeight: "700" }}>
                   {companyProfile?.company_name?.charAt(0) || "C"}
                 </span>
               </div>
             )}
           </div>
 
-          {/* Invoice Title and Balance */}
-          <div className="text-right">
-            <h1 className="text-4xl font-light text-gray-700 mb-1">Invoice</h1>
-            <p className="text-gray-500 text-sm"># {invoiceNumber}</p>
-            <div className="mt-4">
-              <p className="text-xs text-gray-500 uppercase">Balance Due</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                NGN{formatCurrency(displayBalanceDue)}
-              </p>
+          {/* Invoice title + number + balance – right */}
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: "38px", fontWeight: "300", color: "#555555", letterSpacing: "1px", marginBottom: "4px" }}>
+              Invoice
+            </div>
+            <div style={{ fontSize: "12px", color: "#888888", marginBottom: "16px" }}>
+              # {invoiceNumber}
+            </div>
+            <div style={{ fontSize: "10px", color: "#999999", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" }}>
+              Balance Due
+            </div>
+            <div style={{ fontSize: "22px", fontWeight: "700", color: "#1a1a1a" }}>
+              NGN{formatCurrency(displayBalanceDue)}
             </div>
           </div>
         </div>
 
-        {/* Company Details */}
-        <div className="mb-8">
-          <p className="font-semibold text-gray-900">
+        {/* ── COMPANY DETAILS (below logo, left-aligned) ── */}
+        <div style={{ marginBottom: "28px" }}>
+          <div style={{ fontWeight: "700", fontSize: "13px", color: "#1a1a1a", marginBottom: "4px" }}>
             {companyProfile?.company_name || "Your Company Name"}
-          </p>
+          </div>
           {companyProfile?.company_address && (
-            <p className="text-sm text-gray-600 whitespace-pre-line">
+            <div style={{ color: "#555555", fontSize: "12px", whiteSpace: "pre-line", lineHeight: "1.6" }}>
               {companyProfile.company_address}
-            </p>
+            </div>
           )}
           {companyProfile?.company_phone && (
-            <p className="text-sm text-gray-600">{companyProfile.company_phone}</p>
+            <div style={{ color: "#555555", fontSize: "12px" }}>{companyProfile.company_phone}</div>
           )}
           {companyProfile?.company_email && (
-            <p className="text-sm text-gray-600">{companyProfile.company_email}</p>
+            <div style={{ color: "#555555", fontSize: "12px" }}>{companyProfile.company_email}</div>
           )}
           {companyProfile?.website && (
-            <p className="text-sm text-gray-600">{companyProfile.website}</p>
+            <div style={{ color: "#555555", fontSize: "12px" }}>{companyProfile.website}</div>
           )}
         </div>
 
-        {/* Bill To and Invoice Info */}
-        <div className="flex justify-between mb-8">
-          {/* Bill To */}
+        {/* ── BILL TO (left) │ INVOICE META (right) ── */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "28px" }}>
+          {/* Bill To – left */}
           <div>
-            <p className="font-semibold text-gray-900 mb-2">{customerName}</p>
+            <div style={{ fontWeight: "700", fontSize: "13px", color: "#1a1a1a", marginBottom: "4px" }}>
+              {customerName}
+            </div>
             {customerAddress && (
-              <p className="text-sm text-gray-600 whitespace-pre-line max-w-[300px]">
+              <div style={{ color: "#555555", fontSize: "12px", whiteSpace: "pre-line", maxWidth: "280px", lineHeight: "1.6" }}>
                 {customerAddress}
-              </p>
+              </div>
             )}
           </div>
 
-          {/* Invoice Details */}
-          <div className="text-right">
-            <table className="ml-auto">
-              <tbody className="text-sm">
-                <tr>
-                  <td className="text-gray-500 pr-4 py-1">Invoice Date :</td>
-                  <td className="text-gray-900 text-right">{formatDate(invoiceDate)}</td>
-                </tr>
-                <tr>
-                  <td className="text-gray-500 pr-4 py-1">Terms :</td>
-                  <td className="text-gray-900 text-right">{terms}</td>
-                </tr>
-                <tr>
-                  <td className="text-gray-500 pr-4 py-1">Due Date :</td>
-                  <td className="text-gray-900 text-right">{formatDate(dueDate)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Items Table */}
-        <div className="mb-6">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-t border-b border-gray-300 bg-gray-50">
-                <th className="text-left py-3 px-3 text-gray-600 font-medium text-sm w-12">
-                  #
-                </th>
-                <th className="text-left py-3 px-3 text-gray-600 font-medium text-sm">
-                  Description
-                </th>
-                <th className="text-center py-3 px-3 text-gray-600 font-medium text-sm w-20">
-                  Qty
-                </th>
-                <th className="text-right py-3 px-3 text-gray-600 font-medium text-sm w-28">
-                  Rate
-                </th>
-                <th className="text-right py-3 px-3 text-gray-600 font-medium text-sm w-32">
-                  Amount
-                </th>
-              </tr>
-            </thead>
+          {/* Invoice meta – right */}
+          <table style={{ borderCollapse: "collapse", fontSize: "12px" }}>
             <tbody>
-              {lineItems.map((item, index) => (
-                <tr key={item.id} className="border-b border-gray-200">
-                  <td className="py-3 px-3 text-gray-900 text-sm align-top">
-                    {index + 1}
-                  </td>
-                  <td className="py-3 px-3 text-gray-900 text-sm">
-                    <div className="font-medium">{item.description.split("\n")[0]}</div>
-                    {item.description.includes("\n") && (
-                      <div className="text-gray-500 text-xs mt-1">
-                        {item.description.split("\n").slice(1).join("\n")}
-                      </div>
-                    )}
-                    {item.location && (
-                      <div className="text-gray-500 text-xs mt-1">{item.location}</div>
-                    )}
-                  </td>
-                  <td className="py-3 px-3 text-gray-900 text-sm text-center">
-                    {item.quantity.toFixed(2)}
-                  </td>
-                  <td className="py-3 px-3 text-gray-900 text-sm text-right">
-                    {formatCurrency(item.price)}
-                  </td>
-                  <td className="py-3 px-3 text-gray-900 text-sm text-right">
-                    {formatCurrency(item.quantity * item.price)}
-                  </td>
-                </tr>
-              ))}
+              <tr>
+                <td style={{ color: "#888888", paddingRight: "20px", paddingBottom: "4px", textAlign: "right" }}>Invoice Date :</td>
+                <td style={{ color: "#1a1a1a", paddingBottom: "4px", textAlign: "right", minWidth: "100px" }}>{formatDate(invoiceDate)}</td>
+              </tr>
+              <tr>
+                <td style={{ color: "#888888", paddingRight: "20px", paddingBottom: "4px", textAlign: "right" }}>Terms :</td>
+                <td style={{ color: "#1a1a1a", paddingBottom: "4px", textAlign: "right" }}>{terms}</td>
+              </tr>
+              <tr>
+                <td style={{ color: "#888888", paddingRight: "20px", textAlign: "right" }}>Due Date :</td>
+                <td style={{ color: "#1a1a1a", textAlign: "right" }}>{formatDate(dueDate)}</td>
+              </tr>
             </tbody>
           </table>
         </div>
 
-        {/* Totals Section */}
-        <div className="flex justify-end mb-8">
-          <table className="w-[300px]">
-            <tbody className="text-sm">
+        {/* ── ITEMS TABLE ── */}
+        <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "24px" }}>
+          <thead>
+            <tr style={{ backgroundColor: "#2d2d2d" }}>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "left", width: "40px" }}>#</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "left" }}>Description</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "center", width: "70px" }}>Qty</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "right", width: "110px" }}>Rate</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "right", width: "120px" }}>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lineItems.map((item, index) => (
+              <tr
+                key={item.id}
+                style={{ borderBottom: "1px solid #e8e8e8", backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafafa" }}
+              >
+                <td style={{ padding: "10px 12px", color: "#1a1a1a", fontSize: "12px", verticalAlign: "top" }}>
+                  {index + 1}
+                </td>
+                <td style={{ padding: "10px 12px", fontSize: "12px", verticalAlign: "top" }}>
+                  <div style={{ fontWeight: "500", color: "#1a1a1a" }}>
+                    {item.description.split("\n")[0]}
+                  </div>
+                  {item.description.includes("\n") && (
+                    <div style={{ color: "#888888", fontSize: "11px", marginTop: "2px" }}>
+                      {item.description.split("\n").slice(1).join("\n")}
+                    </div>
+                  )}
+                  {item.location && (
+                    <div style={{ color: "#888888", fontSize: "11px", marginTop: "2px" }}>
+                      {item.location}
+                    </div>
+                  )}
+                </td>
+                <td style={{ padding: "10px 12px", color: "#1a1a1a", fontSize: "12px", textAlign: "center", verticalAlign: "top" }}>
+                  {item.quantity.toFixed(2)}
+                </td>
+                <td style={{ padding: "10px 12px", color: "#1a1a1a", fontSize: "12px", textAlign: "right", verticalAlign: "top" }}>
+                  {formatCurrency(item.price)}
+                </td>
+                <td style={{ padding: "10px 12px", color: "#1a1a1a", fontSize: "12px", textAlign: "right", verticalAlign: "top" }}>
+                  {formatCurrency(item.quantity * item.price)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {/* ── TOTALS (right-aligned) ── */}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "32px" }}>
+          <table style={{ borderCollapse: "collapse", minWidth: "280px", fontSize: "12px" }}>
+            <tbody>
               <tr>
-                <td className="py-2 text-right text-gray-600">Sub Total</td>
-                <td className="py-2 text-right text-gray-900 pl-8 w-32">
-                  {formatCurrency(taxType === "inclusive" ? subtotal - vatAmount : subtotal)}
+                <td style={{ padding: "6px 16px 6px 0", color: "#555555", textAlign: "right" }}>Sub Total</td>
+                <td style={{ padding: "6px 0", color: "#1a1a1a", textAlign: "right", minWidth: "120px" }}>
+                  {formatCurrency(baseSubtotal)}
                 </td>
               </tr>
               {shippingCharge > 0 && (
                 <tr>
-                  <td className="py-2 text-right text-gray-600">
+                  <td style={{ padding: "6px 16px 6px 0", color: "#555555", textAlign: "right" }}>
                     Shipping charge
                     <br />
-                    <span className="text-xs text-gray-400">(VAT (7.5%) )</span>
+                    <span style={{ fontSize: "10px", color: "#999999" }}>(VAT (7.5%) )</span>
                   </td>
-                  <td className="py-2 text-right text-gray-900 pl-8">
+                  <td style={{ padding: "6px 0", color: "#1a1a1a", textAlign: "right" }}>
                     {formatCurrency(shippingCharge)}
                   </td>
                 </tr>
               )}
               {taxType !== "none" && vatAmount > 0 && (
                 <tr>
-                  <td className="py-2 text-right text-gray-600">VAT (7.5%)</td>
-                  <td className="py-2 text-right text-gray-900 pl-8">
+                  <td style={{ padding: "6px 16px 6px 0", color: "#555555", textAlign: "right" }}>VAT (7.5%)</td>
+                  <td style={{ padding: "6px 0", color: "#1a1a1a", textAlign: "right" }}>
                     {formatCurrency(vatAmount)}
                   </td>
                 </tr>
               )}
-              <tr className="border-t border-gray-300">
-                <td className="py-3 text-right font-semibold text-gray-900">Total</td>
-                <td className="py-3 text-right font-semibold text-gray-900 pl-8">
+              <tr style={{ borderTop: "1px solid #cccccc" }}>
+                <td style={{ padding: "10px 16px 10px 0", fontWeight: "700", color: "#1a1a1a", textAlign: "right" }}>Total</td>
+                <td style={{ padding: "10px 0", fontWeight: "700", color: "#1a1a1a", textAlign: "right" }}>
                   NGN{formatCurrency(total)}
                 </td>
               </tr>
-              <tr className="bg-gray-100">
-                <td className="py-3 px-3 text-right font-semibold text-gray-900">
-                  Balance Due
-                </td>
-                <td className="py-3 px-3 text-right font-bold text-gray-900">
+              <tr style={{ backgroundColor: "#f0f0f0" }}>
+                <td style={{ padding: "10px 16px 10px 8px", fontWeight: "700", color: "#1a1a1a", textAlign: "right" }}>Balance Due</td>
+                <td style={{ padding: "10px 8px 10px 0", fontWeight: "700", color: "#1a1a1a", textAlign: "right" }}>
                   NGN{formatCurrency(displayBalanceDue)}
                 </td>
               </tr>
@@ -280,51 +296,54 @@ const InvoiceTemplate = forwardRef<HTMLDivElement, InvoiceTemplateProps>(
           </table>
         </div>
 
-        {/* Notes Section */}
+        {/* ── NOTES ── */}
         {notes && (
-          <div className="mb-8 text-sm text-gray-600">
+          <div style={{ marginBottom: "24px", fontSize: "12px", color: "#555555" }}>
             <p>{notes}</p>
           </div>
         )}
 
-        {/* Bank Details */}
+        {/* ── BANK DETAILS ── */}
         {bankDetails && (
-          <div className="mb-8 text-sm">
-            <p className="text-gray-900">{bankDetails.account_number}</p>
-            <p className="text-gray-600">{bankDetails.bank_name}</p>
+          <div style={{ marginBottom: "24px", fontSize: "12px" }}>
+            <div style={{ color: "#1a1a1a", fontWeight: "500" }}>{bankDetails.account_number}</div>
+            <div style={{ color: "#888888" }}>{bankDetails.bank_name}</div>
+            {bankDetails.account_name && (
+              <div style={{ color: "#888888" }}>{bankDetails.account_name}</div>
+            )}
           </div>
         )}
 
-        {/* Footer - Signature and TIN */}
-        <div className="border-t border-gray-200 pt-6 mt-8">
-          <div className="flex justify-between items-end">
-            <div>
+        {/* ── FOOTER: TIN (left) │ Signature (right) ── */}
+        <div style={{ borderTop: "1px solid #dddddd", paddingTop: "20px", marginTop: "16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+            <div style={{ fontSize: "12px", color: "#888888" }}>
               {companyProfile?.company_name && (
-                <p className="text-sm text-gray-600">{companyProfile.company_name}</p>
+                <div>{companyProfile.company_name}</div>
               )}
               {companyProfile?.tin_number && (
-                <p className="text-sm text-gray-600">TIN - {companyProfile.tin_number}</p>
+                <div>TIN - {companyProfile.tin_number}</div>
               )}
             </div>
-            <div className="text-center">
+            <div style={{ textAlign: "center" }}>
               {companyProfile?.authorized_signature && (
-                <div className="mb-2">
+                <div style={{ marginBottom: "6px" }}>
                   <img
                     src={companyProfile.authorized_signature}
                     alt="Authorized Signature"
-                    className="max-h-16 object-contain mx-auto"
+                    style={{ maxHeight: "56px", objectFit: "contain", display: "block", margin: "0 auto" }}
                   />
                 </div>
               )}
-              <p className="text-sm text-gray-600 border-t border-gray-300 pt-2">
+              <div style={{ borderTop: "1px solid #cccccc", paddingTop: "6px", fontSize: "11px", color: "#888888", minWidth: "140px" }}>
                 For {companyProfile?.company_name || "Company"}
-              </p>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Page Number */}
-        <div className="text-center text-xs text-gray-400 mt-8 pt-4 border-t border-gray-200">
+        {/* ── PAGE NUMBER ── */}
+        <div style={{ textAlign: "center", fontSize: "11px", color: "#cccccc", marginTop: "24px", borderTop: "1px solid #eeeeee", paddingTop: "12px" }}>
           1
         </div>
       </div>

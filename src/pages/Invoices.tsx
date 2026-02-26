@@ -97,6 +97,8 @@ interface Invoice {
   second_approved_at?: string | null;
   customers?: {
     company_name: string;
+    factory_address?: string | null;
+    head_office_address?: string | null;
   };
   dispatches?: {
     pickup_address: string;
@@ -352,7 +354,7 @@ const InvoicesPage = () => {
         .from("invoices")
         .select(`
           *,
-          customers(company_name),
+          customers(company_name, factory_address, head_office_address),
           dispatches(pickup_address, delivery_address, distance_km)
         `)
         .order("created_at", { ascending: false });
@@ -715,49 +717,59 @@ const InvoicesPage = () => {
 
       const lineItemsFromNotes = parseLineItems(invoice.notes);
 
-      // Header - Company Logo placeholder and Invoice title
-      // Left side: Company info
+      // ── HEADER: Logo (top-left) │ Invoice title + balance (top-right) ──
+      const logoW = 45;
+      const logoH = 30;
+
       if (companyProfile?.company_logo) {
         try {
-          doc.addImage(companyProfile.company_logo, 'PNG', margin, yPos, 40, 25);
+          // Try PNG first, then JPEG
+          try {
+            doc.addImage(companyProfile.company_logo, 'PNG', margin, yPos, logoW, logoH);
+          } catch {
+            doc.addImage(companyProfile.company_logo, 'JPEG', margin, yPos, logoW, logoH);
+          }
         } catch (e) {
-          // If logo fails to load, draw a placeholder
+          // Fallback placeholder
           doc.setFillColor(249, 115, 22);
-          doc.roundedRect(margin, yPos, 30, 20, 3, 3, 'F');
+          doc.roundedRect(margin, yPos, logoW, logoH, 3, 3, 'F');
           doc.setTextColor(255, 255, 255);
-          doc.setFontSize(16);
+          doc.setFontSize(20);
           doc.setFont("helvetica", "bold");
-          doc.text(companyProfile?.company_name?.charAt(0) || "C", margin + 15, yPos + 13, { align: "center" });
+          doc.text(companyProfile?.company_name?.charAt(0) || "C", margin + logoW / 2, yPos + logoH / 2 + 4, { align: "center" });
         }
       } else {
         doc.setFillColor(249, 115, 22);
-        doc.roundedRect(margin, yPos, 30, 20, 3, 3, 'F');
+        doc.roundedRect(margin, yPos, logoW, logoH, 3, 3, 'F');
         doc.setTextColor(255, 255, 255);
-        doc.setFontSize(16);
+        doc.setFontSize(20);
         doc.setFont("helvetica", "bold");
-        doc.text(companyProfile?.company_name?.charAt(0) || "C", margin + 15, yPos + 13, { align: "center" });
+        doc.text(companyProfile?.company_name?.charAt(0) || "C", margin + logoW / 2, yPos + logoH / 2 + 4, { align: "center" });
       }
 
-      // Right side: Invoice title and balance due
-      doc.setTextColor(100, 100, 100);
-      doc.setFontSize(28);
+      // Right side: "Invoice" title
+      doc.setTextColor(90, 90, 90);
+      doc.setFontSize(30);
       doc.setFont("helvetica", "normal");
-      doc.text("Invoice", pageWidth - margin, yPos + 8, { align: "right" });
+      doc.text("Invoice", pageWidth - margin, yPos + 10, { align: "right" });
 
+      // Invoice number
       doc.setFontSize(9);
-      doc.setTextColor(128, 128, 128);
-      doc.text(`# ${invoice.invoice_number}`, pageWidth - margin, yPos + 15, { align: "right" });
+      doc.setTextColor(140, 140, 140);
+      doc.text(`# ${invoice.invoice_number}`, pageWidth - margin, yPos + 18, { align: "right" });
 
+      // "Balance Due" label
       doc.setFontSize(8);
-      doc.setTextColor(128, 128, 128);
-      doc.text("Balance Due", pageWidth - margin, yPos + 25, { align: "right" });
+      doc.setTextColor(150, 150, 150);
+      doc.text("Balance Due", pageWidth - margin, yPos + 27, { align: "right" });
 
-      doc.setFontSize(14);
-      doc.setTextColor(30, 30, 30);
+      // Balance amount – bold, larger
+      doc.setFontSize(15);
+      doc.setTextColor(20, 20, 20);
       doc.setFont("helvetica", "bold");
-      doc.text(`NGN${pdfFormatCurrency(invoice.total_amount)}`, pageWidth - margin, yPos + 32, { align: "right" });
+      doc.text(`NGN${pdfFormatCurrency(invoice.total_amount)}`, pageWidth - margin, yPos + 35, { align: "right" });
 
-      yPos += 45;
+      yPos += 48;
 
       // Company Details
       doc.setFont("helvetica", "bold");
@@ -790,45 +802,58 @@ const InvoicesPage = () => {
         doc.text(companyProfile.website, margin, yPos);
       }
 
-      yPos += 15;
+      yPos += 12;
 
-      // Bill To and Invoice Info in two columns
+      // ── BILL TO (left) │ INVOICE META (right) ──
       const leftColX = margin;
-      const rightColX = pageWidth - margin - 60;
+      const rightColX = pageWidth - margin - 65;
       const infoStartY = yPos;
 
-      // Left: Bill To
+      // Left: Customer name (bold) + address
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
-      doc.setTextColor(30, 30, 30);
+      doc.setTextColor(20, 20, 20);
       doc.text(invoice.customers?.company_name || "Customer", leftColX, yPos);
 
-      // Right: Invoice details table
+      const customerAddr = invoice.customers?.factory_address || invoice.customers?.head_office_address || null;
+      if (customerAddr) {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.setTextColor(90, 90, 90);
+        const addrLines = doc.splitTextToSize(customerAddr, 90);
+        addrLines.forEach((line: string, i: number) => {
+          doc.text(line, leftColX, yPos + 5 + i * 4.5);
+        });
+      }
+
+      // Right: Invoice meta (label right-aligned, value right-aligned)
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
 
-      doc.setTextColor(128, 128, 128);
+      doc.setTextColor(140, 140, 140);
       doc.text("Invoice Date :", rightColX, infoStartY);
-      doc.setTextColor(30, 30, 30);
+      doc.setTextColor(20, 20, 20);
       doc.text(formatDate(invoice.created_at), pageWidth - margin, infoStartY, { align: "right" });
 
-      doc.setTextColor(128, 128, 128);
-      doc.text("Terms :", rightColX, infoStartY + 5);
-      doc.setTextColor(30, 30, 30);
-      doc.text("Due on Receipt", pageWidth - margin, infoStartY + 5, { align: "right" });
+      doc.setTextColor(140, 140, 140);
+      doc.text("Terms :", rightColX, infoStartY + 6);
+      doc.setTextColor(20, 20, 20);
+      doc.text("Due on Receipt", pageWidth - margin, infoStartY + 6, { align: "right" });
 
-      doc.setTextColor(128, 128, 128);
-      doc.text("Due Date :", rightColX, infoStartY + 10);
-      doc.setTextColor(30, 30, 30);
-      doc.text(invoice.due_date ? formatDate(invoice.due_date) : "—", pageWidth - margin, infoStartY + 10, { align: "right" });
+      doc.setTextColor(140, 140, 140);
+      doc.text("Due Date :", rightColX, infoStartY + 12);
+      doc.setTextColor(20, 20, 20);
+      doc.text(invoice.due_date ? formatDate(invoice.due_date) : "—", pageWidth - margin, infoStartY + 12, { align: "right" });
 
-      yPos += 25;
+      yPos += 28;
 
       // Items Table
+      // Build description as plain string — avoid \n in jsPDF cells to prevent
+      // letter-spacing artifacts. Use " · " as a readable inline separator.
       const tableData = lineItemsFromNotes.length > 0
         ? lineItemsFromNotes.map((item: any, index: number) => [
             index + 1,
-            item.location ? `${item.description}\n${item.location}` : item.description,
+            item.location ? `${item.description}  ·  ${item.location}` : item.description,
             item.quantity.toFixed(2),
             pdfFormatCurrency(item.price),
             pdfFormatCurrency(item.quantity * item.price),
@@ -836,7 +861,7 @@ const InvoicesPage = () => {
         : [[
             1,
             invoice.dispatches
-              ? `Delivery Service\n${invoice.dispatches.pickup_address?.split(',')[0]} → ${invoice.dispatches.delivery_address?.split(',')[0]}`
+              ? `Delivery Service  ·  ${invoice.dispatches.pickup_address?.split(',')[0]} \u2192 ${invoice.dispatches.delivery_address?.split(',')[0]}`
               : "Service",
             "1.00",
             pdfFormatCurrency(invoice.amount),
@@ -850,27 +875,30 @@ const InvoicesPage = () => {
         theme: 'plain',
         styles: {
           fontSize: 9,
-          cellPadding: 4,
-          textColor: [30, 30, 30],
+          cellPadding: { top: 5, bottom: 5, left: 5, right: 5 },
+          textColor: [20, 20, 20],
         },
         headStyles: {
-          fillColor: [248, 248, 248],
-          textColor: [100, 100, 100],
+          fillColor: [45, 45, 45],
+          textColor: [255, 255, 255],
           fontStyle: 'bold',
-          lineWidth: { top: 0.5, bottom: 0.5 },
-          lineColor: [200, 200, 200],
+          fontSize: 9,
+        },
+        alternateRowStyles: {
+          fillColor: [250, 250, 250],
         },
         columnStyles: {
-          0: { cellWidth: 15, halign: 'left' },
+          0: { cellWidth: 14, halign: 'left' },
           1: { cellWidth: 'auto' },
-          2: { cellWidth: 25, halign: 'center' },
-          3: { cellWidth: 35, halign: 'right' },
+          2: { cellWidth: 24, halign: 'center' },
+          3: { cellWidth: 36, halign: 'right' },
           4: { cellWidth: 40, halign: 'right' },
         },
         margin: { left: margin, right: margin },
         didDrawCell: (data: any) => {
           if (data.section === 'body') {
-            doc.setDrawColor(230, 230, 230);
+            doc.setDrawColor(232, 232, 232);
+            doc.setLineWidth(0.3);
             doc.line(data.cell.x, data.cell.y + data.cell.height, data.cell.x + data.cell.width, data.cell.y + data.cell.height);
           }
         },
@@ -879,48 +907,68 @@ const InvoicesPage = () => {
       // Get the final Y position after the table
       yPos = (doc as any).lastAutoTable.finalY + 10;
 
-      // Totals Section - right aligned
-      const totalsX = pageWidth - margin - 80;
+      // ── TOTALS SECTION (right-aligned) ──
+      const totalsLabelX = pageWidth - margin - 75;
       const valuesX = pageWidth - margin;
+      const rowH = 7;
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
 
       // Sub Total
       doc.setTextColor(100, 100, 100);
-      doc.text("Sub Total", totalsX, yPos);
-      doc.setTextColor(30, 30, 30);
+      doc.text("Sub Total", totalsLabelX, yPos, { align: "left" });
+      doc.setTextColor(20, 20, 20);
       doc.text(pdfFormatCurrency(invoice.amount), valuesX, yPos, { align: "right" });
+
+      // Shipping charge — derived as difference between total, tax, and line-item subtotal
+      const derivedShipping = invoice.total_amount - invoice.tax_amount - invoice.amount;
+      if (derivedShipping > 0.01) {
+        yPos += rowH;
+        doc.setTextColor(100, 100, 100);
+        doc.text("Shipping charge", totalsLabelX, yPos, { align: "left" });
+        doc.setFontSize(7.5);
+        doc.text("(VAT (7.5%) )", totalsLabelX, yPos + 3.5, { align: "left" });
+        doc.setFontSize(9);
+        doc.setTextColor(20, 20, 20);
+        doc.text(pdfFormatCurrency(derivedShipping), valuesX, yPos, { align: "right" });
+        yPos += 3;
+      }
 
       // VAT (if applicable)
       if (invoice.tax_amount > 0) {
-        yPos += 6;
+        yPos += rowH;
         doc.setTextColor(100, 100, 100);
-        doc.text("VAT (7.5%)", totalsX, yPos);
-        doc.setTextColor(30, 30, 30);
+        doc.text("VAT (7.5%)", totalsLabelX, yPos, { align: "left" });
+        doc.setTextColor(20, 20, 20);
         doc.text(pdfFormatCurrency(invoice.tax_amount), valuesX, yPos, { align: "right" });
       }
 
-      // Total
-      yPos += 8;
+      // Separator line before Total
+      yPos += 5;
       doc.setDrawColor(200, 200, 200);
-      doc.line(totalsX - 10, yPos - 3, valuesX, yPos - 3);
+      doc.setLineWidth(0.4);
+      doc.line(totalsLabelX - 5, yPos, valuesX, yPos);
+      yPos += 5;
+
+      // Total (bold)
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(20, 20, 20);
+      doc.text("Total", totalsLabelX, yPos);
+      doc.text(`NGN${pdfFormatCurrency(invoice.total_amount)}`, valuesX, yPos, { align: "right" });
+
+      // Balance Due row (grey background)
+      yPos += 4;
+      const balanceRowH = 11;
+      doc.setFillColor(240, 240, 240);
+      doc.rect(totalsLabelX - 5, yPos, valuesX - totalsLabelX + 5, balanceRowH, 'F');
+      yPos += 7;
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(10);
-      doc.setTextColor(30, 30, 30);
-      doc.text("Total", totalsX, yPos + 3);
-      doc.text(`NGN${pdfFormatCurrency(invoice.total_amount)}`, valuesX, yPos + 3, { align: "right" });
-
-      // Balance Due
-      yPos += 10;
-      doc.setFillColor(245, 245, 245);
-      doc.rect(totalsX - 10, yPos - 3, valuesX - totalsX + 15, 10, 'F');
-
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10);
-      doc.text("Balance Due", totalsX, yPos + 3);
-      doc.text(`NGN${pdfFormatCurrency(invoice.total_amount)}`, valuesX, yPos + 3, { align: "right" });
+      doc.text("Balance Due", totalsLabelX, yPos);
+      doc.text(`NGN${pdfFormatCurrency(invoice.total_amount)}`, valuesX, yPos, { align: "right" });
 
       yPos += 20;
 
