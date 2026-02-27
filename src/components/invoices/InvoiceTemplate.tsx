@@ -40,6 +40,7 @@ interface InvoiceTemplateProps {
   total: number;
   taxType: "none" | "inclusive" | "exclusive";
   shippingCharge?: number;
+  serviceCharge?: number;
   notes?: string;
   companyProfile: CompanyProfile | null;
   bankDetails: BankDetails | null;
@@ -77,6 +78,7 @@ const InvoiceTemplate = forwardRef<HTMLDivElement, InvoiceTemplateProps>(
       total,
       taxType,
       shippingCharge = 0,
+      serviceCharge = 0,
       notes,
       companyProfile,
       bankDetails,
@@ -269,6 +271,22 @@ const InvoiceTemplate = forwardRef<HTMLDivElement, InvoiceTemplateProps>(
                   </td>
                   <td style={{ padding: "6px 0", color: "#1a1a1a", textAlign: "right" }}>
                     {formatCurrency(shippingCharge)}
+                  </td>
+                </tr>
+              )}
+              {serviceCharge > 0 && (
+                <tr>
+                  <td style={{ padding: "6px 16px 6px 0", color: "#555555", textAlign: "right" }}>
+                    Service Charge
+                    {taxType !== "none" && (
+                      <>
+                        <br />
+                        <span style={{ fontSize: "10px", color: "#999999" }}>(VAT (7.5%) )</span>
+                      </>
+                    )}
+                  </td>
+                  <td style={{ padding: "6px 0", color: "#1a1a1a", textAlign: "right" }}>
+                    {formatCurrency(serviceCharge)}
                   </td>
                 </tr>
               )}
