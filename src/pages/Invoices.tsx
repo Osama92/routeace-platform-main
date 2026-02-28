@@ -73,6 +73,9 @@ interface LineItem {
   quantity: number;
   price: number;
   location?: string;
+  tonnage?: string;
+  vatType?: "none" | "inclusive" | "exclusive";
+  serviceCharge?: number;
 }
 
 interface Invoice {
@@ -229,16 +232,14 @@ const InvoicesPage = () => {
     customer_id: "",
     dispatch_id: "",
     amount: "",
-    tax_type: "none" as "none" | "inclusive" | "exclusive",
-    tax_amount: "0",
-    service_charge: "",
     due_date: "",
     notes: "",
+    invoice_number: "",
   });
 
   // Line items state for the new invoice creation
   const [lineItems, setLineItems] = useState<LineItem[]>([
-    { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0 }
+    { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }
   ]);
 
   // Generate unique ID for line items
@@ -254,7 +255,7 @@ const InvoicesPage = () => {
     };
     setLineItems(prev => [
       ...prev,
-      { id: generateItemId(), type, description: descriptions[type], quantity: 1, price: 0, location: "" }
+      { id: generateItemId(), type, description: descriptions[type], quantity: 1, price: 0, location: "", tonnage: "", vatType: "none", serviceCharge: 0 }
     ]);
   };
 
@@ -272,35 +273,41 @@ const InvoicesPage = () => {
     ));
   };
 
-  // Calculate totals from line items (fuel items are not taxable)
+  // Calculate totals from line items — VAT and service charge are per-item
   const invoiceTotals = useMemo(() => {
-    const serviceCharge = parseFloat(formData.service_charge) || 0;
-    const lineSubtotal = lineItems.reduce((sum, item) => sum + (item.quantity * item.price), 0);
-    const subtotal = lineSubtotal + serviceCharge;
-    // Calculate taxable amount (exclude fuel items, include service charge)
-    const taxableLineAmount = lineItems
-      .filter(item => item.type !== "fuel")
-      .reduce((sum, item) => sum + (item.quantity * item.price), 0);
-    const taxableAmount = taxableLineAmount + serviceCharge;
-    const fuelAmount = lineItems
-      .filter(item => item.type === "fuel")
-      .reduce((sum, item) => sum + (item.quantity * item.price), 0);
-
+    let lineSubtotal = 0;
+    let totalServiceCharge = 0;
     let vatAmount = 0;
-    let total = subtotal;
 
-    if (formData.tax_type === "exclusive") {
-      // 7.5% VAT added on top of taxable items + service charge
-      vatAmount = taxableAmount * 0.075;
-      total = subtotal + vatAmount;
-    } else if (formData.tax_type === "inclusive") {
-      // VAT already included in taxable items + service charge, extract it
-      vatAmount = taxableAmount - (taxableAmount / 1.075);
-      total = subtotal; // Total stays same for inclusive
-    }
+    lineItems.forEach(item => {
+      const lineAmount = item.quantity * item.price;
+      const sc = item.serviceCharge || 0;
+      lineSubtotal += lineAmount;
+      totalServiceCharge += sc;
 
-    return { subtotal, lineSubtotal, vatAmount, total, taxableAmount, fuelAmount, serviceCharge };
-  }, [lineItems, formData.tax_type, formData.service_charge]);
+      const taxBase = lineAmount + sc;
+      if (item.vatType === "exclusive") {
+        vatAmount += taxBase * 0.075;
+      } else if (item.vatType === "inclusive") {
+        vatAmount += taxBase - taxBase / 1.075;
+      }
+    });
+
+    // For inclusive VAT items, the "pre-VAT" line total is already in lineSubtotal
+    // total = lines + service charges + exclusive VAT (inclusive VAT already embedded in prices)
+    const exclusiveVat = lineItems.reduce((sum, item) => {
+      if (item.vatType === "exclusive") {
+        const taxBase = (item.quantity * item.price) + (item.serviceCharge || 0);
+        return sum + taxBase * 0.075;
+      }
+      return sum;
+    }, 0);
+
+    const total = lineSubtotal + totalServiceCharge + exclusiveVat;
+    const subtotal = lineSubtotal + totalServiceCharge;
+
+    return { subtotal, lineSubtotal, vatAmount, total, totalServiceCharge };
+  }, [lineItems]);
 
   // Get selected customer name
   const selectedCustomer = useMemo(() => {
@@ -322,38 +329,7 @@ const InvoicesPage = () => {
     return dispatches.filter(d => !dispatchIdsWithInvoices.has(d.id));
   }, [dispatches, invoices]);
 
-  // Calculate tax amount based on tax type
-  const calculateTax = (amount: string, taxType: string): number => {
-    const baseAmount = parseFloat(amount) || 0;
-    if (taxType === "exclusive") {
-      // 7.5% added on top
-      return baseAmount * 0.075;
-    } else if (taxType === "inclusive") {
-      // 7.5% already included, extract tax
-      return baseAmount - (baseAmount / 1.075);
-    }
-    return 0;
-  };
 
-  // Calculate total based on tax type
-  const calculateTotal = (amount: string, taxType: string): { subtotal: number; tax: number; total: number } => {
-    const baseAmount = parseFloat(amount) || 0;
-    if (taxType === "exclusive") {
-      const tax = baseAmount * 0.075;
-      return { subtotal: baseAmount, tax, total: baseAmount + tax };
-    } else if (taxType === "inclusive") {
-      const subtotal = baseAmount / 1.075;
-      const tax = baseAmount - subtotal;
-      return { subtotal, tax, total: baseAmount };
-    }
-    return { subtotal: baseAmount, tax: 0, total: baseAmount };
-  };
-
-  // Update tax when amount or tax type changes
-  useEffect(() => {
-    const tax = calculateTax(formData.amount, formData.tax_type);
-    setFormData(prev => ({ ...prev, tax_amount: tax.toFixed(2) }));
-  }, [formData.amount, formData.tax_type]);
 
   const fetchInvoices = async () => {
     try {
@@ -500,27 +476,26 @@ const InvoicesPage = () => {
 
     setSaving(true);
     try {
-      // Build notes from line items for record keeping
-      const lineItemsNote = lineItems.map(item =>
-        `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price.toLocaleString()}`
-      ).join('; ');
-
-      // Append service charge to notes so it can be recovered for PDF generation
-      const serviceChargeNote = invoiceTotals.serviceCharge > 0
-        ? `\n\nService Charge: ₦${invoiceTotals.serviceCharge.toLocaleString()}`
-        : '';
+      // Encode each line item including per-item tonnage, vatType, serviceCharge
+      const lineItemsNote = lineItems.map(item => {
+        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price.toLocaleString()}`;
+        if (item.tonnage) s += `|t:${item.tonnage}`;
+        if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
+        if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
+        return s;
+      }).join('; ');
 
       // For non-admin users (support/operations role), set approval workflow
       const insertData: any = {
-        invoice_number: generateInvoiceNumber(),
+        invoice_number: formData.invoice_number || generateInvoiceNumber(),
         customer_id: formData.customer_id,
         dispatch_id: formData.dispatch_id || null,
         amount: invoiceTotals.lineSubtotal,
         tax_amount: invoiceTotals.vatAmount,
         total_amount: invoiceTotals.total,
-        tax_type: formData.tax_type,
+        tax_type: "none",
         due_date: formData.due_date || null,
-        notes: lineItemsNote + serviceChargeNote + (formData.notes ? `\n\nNotes: ${formData.notes}` : ''),
+        notes: lineItemsNote + (formData.notes ? `\n\nNotes: ${formData.notes}` : ''),
         status: requiresApproval ? "draft" : "pending",
         created_by: user?.id,
       };
@@ -570,14 +545,12 @@ const InvoicesPage = () => {
       customer_id: "",
       dispatch_id: "",
       amount: "",
-      tax_type: "none",
-      tax_amount: "0",
-      service_charge: "",
       due_date: "",
       notes: "",
+      invoice_number: generateInvoiceNumber(),
     });
     setLineItems([
-      { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0 }
+      { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }
     ]);
   };
 
@@ -615,33 +588,30 @@ const InvoicesPage = () => {
 
   // Parse line items stored in notes back into the form's LineItem array
   const parseLineItemsFromNotes = (notes: string | null): LineItem[] => {
-    if (!notes) return [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0 }];
-    const itemsSection = notes.split('\n\nService Charge:')[0].split('\n\nNotes:')[0];
-    const items = itemsSection.split('; ').map((item, index) => {
-      const match = item.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
-      if (match) {
-        return {
-          id: generateItemId(),
-          type: "delivery" as LineItem["type"],
-          description: match[1].trim(),
-          location: match[2] || "",
-          quantity: parseFloat(match[3]) || 1,
-          price: parseFloat(match[4].replace(/,/g, "")) || 0,
-        };
-      }
-      return null;
+    if (!notes) return [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }];
+    const itemsSection = notes.split('\n\nNotes:')[0];
+    const items = itemsSection.split('; ').map((raw) => {
+      // Each item may have trailing pipe-separated metadata: |t:tonnage|v:vatType|sc:serviceCharge
+      const [itemPart, ...metaParts] = raw.split('|');
+      const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
+      if (!match) return null;
+      const meta: Record<string, string> = {};
+      metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v) meta[k.trim()] = v.trim(); });
+      return {
+        id: generateItemId(),
+        type: "delivery" as LineItem["type"],
+        description: match[1].trim(),
+        location: match[2] || "",
+        quantity: parseFloat(match[3]) || 1,
+        price: parseFloat(match[4].replace(/,/g, "")) || 0,
+        tonnage: meta["t"] || "",
+        vatType: (meta["v"] as LineItem["vatType"]) || "none",
+        serviceCharge: meta["sc"] ? parseFloat(meta["sc"]) : 0,
+      };
     }).filter(Boolean) as LineItem[];
     return items.length > 0
       ? items
-      : [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0 }];
-  };
-
-  // Parse service charge from notes (mirrors the PDF helper)
-  const parseServiceChargeFromNotes = (notes: string | null): string => {
-    if (!notes) return "";
-    const match = notes.match(/\n\nService Charge:\s*₦?([\d,]+(?:\.\d+)?)/);
-    if (match) return String(parseFloat(match[1].replace(/,/g, "")) || 0);
-    return "";
+      : [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }];
   };
 
   // Parse user-facing notes (the part after \n\nNotes:)
@@ -653,7 +623,6 @@ const InvoicesPage = () => {
 
   const openEditDialog = (invoice: Invoice) => {
     const parsedItems = parseLineItemsFromNotes(invoice.notes);
-    const parsedServiceCharge = parseServiceChargeFromNotes(invoice.notes);
     const parsedNotes = parseUserNotes(invoice.notes);
 
     setEditingInvoice(invoice);
@@ -661,11 +630,9 @@ const InvoicesPage = () => {
       customer_id: invoice.customer_id,
       dispatch_id: invoice.dispatch_id || "",
       amount: String(invoice.amount),
-      tax_type: (invoice as any).tax_type || "none",
-      tax_amount: String(invoice.tax_amount),
-      service_charge: parsedServiceCharge,
       due_date: invoice.due_date ? invoice.due_date.split('T')[0] : "",
       notes: parsedNotes,
+      invoice_number: invoice.invoice_number,
     });
     setLineItems(parsedItems);
     setIsEditDialogOpen(true);
@@ -685,23 +652,24 @@ const InvoicesPage = () => {
 
     setSaving(true);
     try {
-      const lineItemsNote = lineItems.map(item =>
-        `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price.toLocaleString()}`
-      ).join('; ');
-
-      const serviceChargeNote = invoiceTotals.serviceCharge > 0
-        ? `\n\nService Charge: ₦${invoiceTotals.serviceCharge.toLocaleString()}`
-        : '';
+      const lineItemsNote = lineItems.map(item => {
+        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price.toLocaleString()}`;
+        if (item.tonnage) s += `|t:${item.tonnage}`;
+        if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
+        if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
+        return s;
+      }).join('; ');
 
       const updateData: any = {
+        invoice_number: formData.invoice_number || editingInvoice.invoice_number,
         customer_id: formData.customer_id,
         dispatch_id: formData.dispatch_id || null,
         amount: invoiceTotals.lineSubtotal,
         tax_amount: invoiceTotals.vatAmount,
         total_amount: invoiceTotals.total,
-        tax_type: formData.tax_type,
+        tax_type: "none",
         due_date: formData.due_date || null,
-        notes: lineItemsNote + serviceChargeNote + (formData.notes ? `\n\nNotes: ${formData.notes}` : ''),
+        notes: lineItemsNote + (formData.notes ? `\n\nNotes: ${formData.notes}` : ''),
       };
 
       const { error } = await supabase
@@ -825,37 +793,51 @@ const InvoicesPage = () => {
         });
       };
 
-      // Parse line items from notes
+      // Parse line items from notes (supports per-item |t:|v:|sc: metadata)
       const parseLineItems = (notes: string | null) => {
         if (!notes) return [];
-        // Strip service charge section and notes section before parsing line items
-        const itemsSection = notes.split('\n\nService Charge:')[0].split('\n\nNotes:')[0];
-        const items = itemsSection.split('; ').map((item, index) => {
-          const match = item.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
-          if (match) {
-            return {
-              id: String(index + 1),
-              description: match[1].trim(),
-              location: match[2] || '',
-              quantity: parseFloat(match[3]) || 1,
-              price: parseFloat(match[4].replace(/,/g, '')) || 0,
-            };
-          }
-          return null;
+        const itemsSection = notes.split('\n\nNotes:')[0];
+        const items = itemsSection.split('; ').map((raw, index) => {
+          const [itemPart, ...metaParts] = raw.split('|');
+          const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
+          if (!match) return null;
+          const meta: Record<string, string> = {};
+          metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v) meta[k.trim()] = v.trim(); });
+          return {
+            id: String(index + 1),
+            description: match[1].trim(),
+            location: match[2] || '',
+            quantity: parseFloat(match[3]) || 1,
+            price: parseFloat(match[4].replace(/,/g, '')) || 0,
+            tonnage: meta['t'] || '',
+            vatType: meta['v'] || 'none',
+            serviceCharge: meta['sc'] ? parseFloat(meta['sc']) : 0,
+          };
         }).filter(Boolean);
         return items;
       };
 
-      // Parse service charge from notes
-      const parseServiceCharge = (notes: string | null): number => {
-        if (!notes) return 0;
-        const match = notes.match(/\n\nService Charge:\s*₦?([\d,]+(?:\.\d+)?)/);
-        if (match) return parseFloat(match[1].replace(/,/g, '')) || 0;
-        return 0;
-      };
-
       const lineItemsFromNotes = parseLineItems(invoice.notes);
-      const serviceChargeFromNotes = parseServiceCharge(invoice.notes);
+
+      // Compute totals from line items for the PDF totals section
+      let pdfLineSubtotal = 0;
+      let pdfTotalServiceCharge = 0;
+      let pdfVatAmount = 0;
+      lineItemsFromNotes.forEach((item: any) => {
+        const lineAmt = item.quantity * item.price;
+        const sc = item.serviceCharge || 0;
+        pdfLineSubtotal += lineAmt;
+        pdfTotalServiceCharge += sc;
+        const taxBase = lineAmt + sc;
+        if (item.vatType === 'exclusive') pdfVatAmount += taxBase * 0.075;
+        else if (item.vatType === 'inclusive') pdfVatAmount += taxBase - taxBase / 1.075;
+      });
+      // For old invoices with no line item metadata, fall back to stored amounts
+      if (lineItemsFromNotes.length === 0 || pdfLineSubtotal === 0) {
+        pdfLineSubtotal = invoice.amount;
+        pdfVatAmount = invoice.tax_amount;
+      }
+      const serviceChargeFromNotes = pdfTotalServiceCharge;
 
       // ── HEADER: Logo (top-left) │ Invoice title + balance (top-right) ──
       const logoW = 45;
@@ -994,6 +976,7 @@ const InvoicesPage = () => {
         ? lineItemsFromNotes.map((item: any, index: number) => [
             index + 1,
             item.location ? `${item.description}  ·  ${item.location}` : item.description,
+            item.tonnage || '—',
             item.quantity.toFixed(2),
             pdfFormatCurrency(item.price),
             pdfFormatCurrency(item.quantity * item.price),
@@ -1003,6 +986,7 @@ const InvoicesPage = () => {
             invoice.dispatches
               ? `Delivery Service  ·  ${invoice.dispatches.pickup_address?.split(',')[0]} \u2192 ${invoice.dispatches.delivery_address?.split(',')[0]}`
               : "Service",
+            '—',
             "1.00",
             pdfFormatCurrency(invoice.amount),
             pdfFormatCurrency(invoice.amount),
@@ -1010,7 +994,7 @@ const InvoicesPage = () => {
 
       autoTable(doc, {
         startY: yPos,
-        head: [['#', 'Description', 'Qty', 'Rate', 'Amount']],
+        head: [['#', 'Description', 'T', 'Qty', 'Rate', 'Amount']],
         body: tableData,
         theme: 'plain',
         styles: {
@@ -1030,9 +1014,10 @@ const InvoicesPage = () => {
         columnStyles: {
           0: { cellWidth: 14, halign: 'left' },
           1: { cellWidth: 'auto' },
-          2: { cellWidth: 24, halign: 'center' },
-          3: { cellWidth: 36, halign: 'right' },
-          4: { cellWidth: 40, halign: 'right' },
+          2: { cellWidth: 28, halign: 'center' },
+          3: { cellWidth: 22, halign: 'center' },
+          4: { cellWidth: 34, halign: 'right' },
+          5: { cellWidth: 38, halign: 'right' },
         },
         margin: { left: margin, right: margin },
         didDrawCell: (data: any) => {
@@ -1059,44 +1044,25 @@ const InvoicesPage = () => {
       doc.setTextColor(100, 100, 100);
       doc.text("Sub Total", totalsLabelX, yPos, { align: "left" });
       doc.setTextColor(20, 20, 20);
-      doc.text(pdfFormatCurrency(invoice.amount), valuesX, yPos, { align: "right" });
-
-      // Shipping charge — derived as difference between total, tax, line-item subtotal, and service charge
-      const derivedShipping = invoice.total_amount - invoice.tax_amount - invoice.amount - serviceChargeFromNotes;
-      if (derivedShipping > 0.01) {
-        yPos += rowH;
-        doc.setTextColor(100, 100, 100);
-        doc.text("Shipping charge", totalsLabelX, yPos, { align: "left" });
-        doc.setFontSize(7.5);
-        doc.text("(VAT (7.5%) )", totalsLabelX, yPos + 3.5, { align: "left" });
-        doc.setFontSize(9);
-        doc.setTextColor(20, 20, 20);
-        doc.text(pdfFormatCurrency(derivedShipping), valuesX, yPos, { align: "right" });
-        yPos += 3;
-      }
+      doc.text(pdfFormatCurrency(pdfLineSubtotal), valuesX, yPos, { align: "right" });
 
       // Service Charge (if any)
       if (serviceChargeFromNotes > 0) {
         yPos += rowH;
         doc.setTextColor(100, 100, 100);
         doc.text("Service Charge", totalsLabelX, yPos, { align: "left" });
-        if (invoice.tax_amount > 0) {
-          doc.setFontSize(7.5);
-          doc.text("(VAT (7.5%) )", totalsLabelX, yPos + 3.5, { align: "left" });
-          doc.setFontSize(9);
-        }
         doc.setTextColor(20, 20, 20);
         doc.text(pdfFormatCurrency(serviceChargeFromNotes), valuesX, yPos, { align: "right" });
         yPos += 3;
       }
 
       // VAT (if applicable)
-      if (invoice.tax_amount > 0) {
+      if (pdfVatAmount > 0) {
         yPos += rowH;
         doc.setTextColor(100, 100, 100);
         doc.text("VAT (7.5%)", totalsLabelX, yPos, { align: "left" });
         doc.setTextColor(20, 20, 20);
-        doc.text(pdfFormatCurrency(invoice.tax_amount), valuesX, yPos, { align: "right" });
+        doc.text(pdfFormatCurrency(pdfVatAmount), valuesX, yPos, { align: "right" });
       }
 
       // Separator line before Total
@@ -1317,6 +1283,7 @@ const InvoicesPage = () => {
           {canCreateInvoice && (
             <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
                 setIsCreateDialogOpen(open);
+                if (open) setFormData(prev => ({ ...prev, invoice_number: prev.invoice_number || generateInvoiceNumber() }));
                 if (!open) resetForm();
               }}>
                 <DialogTrigger asChild>
@@ -1337,6 +1304,18 @@ const InvoicesPage = () => {
                       </DialogHeader>
 
                       <div className="space-y-5">
+                        {/* Invoice Number */}
+                        <div className="space-y-2">
+                          <Label htmlFor="invoice_number">Invoice Number *</Label>
+                          <Input
+                            id="invoice_number"
+                            value={formData.invoice_number}
+                            onChange={(e) => setFormData(prev => ({ ...prev, invoice_number: e.target.value }))}
+                            placeholder="e.g. INV-2025-001"
+                            className="bg-secondary/50"
+                          />
+                        </div>
+
                         {/* Customer Selection */}
                         <div className="space-y-2">
                           <Label htmlFor="customer_id">Customer *</Label>
@@ -1388,103 +1367,88 @@ const InvoicesPage = () => {
                           <div className="flex items-center justify-between">
                             <Label>Line Items</Label>
                             <div className="flex gap-1 flex-wrap justify-end">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => addLineItem("delivery")}
-                                className="h-8 text-xs gap-1"
-                              >
-                                <Truck className="w-3 h-3" />
-                                Delivery
+                              <Button type="button" variant="outline" size="sm" onClick={() => addLineItem("delivery")} className="h-8 text-xs gap-1">
+                                <Truck className="w-3 h-3" />Delivery
                               </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => addLineItem("extra_drop")}
-                                className="h-8 text-xs gap-1"
-                              >
-                                <MapPin className="w-3 h-3" />
-                                Extra Drop
+                              <Button type="button" variant="outline" size="sm" onClick={() => addLineItem("extra_drop")} className="h-8 text-xs gap-1">
+                                <MapPin className="w-3 h-3" />Extra Drop
                               </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => addLineItem("fuel")}
-                                className="h-8 text-xs gap-1"
-                              >
-                                <Fuel className="w-3 h-3" />
-                                Fuel
+                              <Button type="button" variant="outline" size="sm" onClick={() => addLineItem("fuel")} className="h-8 text-xs gap-1">
+                                <Fuel className="w-3 h-3" />Fuel
                               </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => addLineItem("toll")}
-                                className="h-8 text-xs gap-1"
-                              >
-                                <CircleDollarSign className="w-3 h-3" />
-                                Toll
+                              <Button type="button" variant="outline" size="sm" onClick={() => addLineItem("toll")} className="h-8 text-xs gap-1">
+                                <CircleDollarSign className="w-3 h-3" />Toll
                               </Button>
                             </div>
                           </div>
 
-                          {/* Line Items List */}
                           <div className="space-y-3">
-                            {lineItems.map((item, index) => (
-                              <div
-                                key={item.id}
-                                className="p-3 rounded-lg border border-border/50 bg-secondary/20 space-y-3"
-                              >
+                            {lineItems.map((item) => (
+                              <div key={item.id} className="p-3 rounded-lg border border-border/50 bg-secondary/20 space-y-2">
+                                {/* Header row */}
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-2">
                                     {item.type === "delivery" && <Truck className="w-4 h-4 text-primary" />}
                                     {item.type === "extra_drop" && <MapPin className="w-4 h-4 text-warning" />}
                                     {item.type === "fuel" && <Fuel className="w-4 h-4 text-blue-500" />}
                                     {item.type === "toll" && <CircleDollarSign className="w-4 h-4 text-green-500" />}
-                                    <span className="text-sm font-medium capitalize">
-                                      {item.type.replace("_", " ")}
-                                    </span>
+                                    <span className="text-sm font-medium capitalize">{item.type.replace("_", " ")}</span>
                                   </div>
                                   {lineItems.length > 1 && (
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7 text-destructive hover:text-destructive"
-                                      onClick={() => removeLineItem(item.id)}
-                                    >
+                                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => removeLineItem(item.id)}>
                                       <Trash2 className="w-4 h-4" />
                                     </Button>
                                   )}
                                 </div>
 
-                                <div className="space-y-2">
-                                  <Input
-                                    value={item.description}
-                                    onChange={(e) => updateLineItem(item.id, "description", e.target.value)}
-                                    placeholder="Description"
-                                    className="bg-secondary/50 h-9"
-                                  />
-                                </div>
+                                {/* Description */}
+                                <Input
+                                  value={item.description}
+                                  onChange={(e) => updateLineItem(item.id, "description", e.target.value)}
+                                  placeholder="Description"
+                                  className="bg-secondary/50 h-9"
+                                />
 
-                                {(item.type === "extra_drop") && (
+                                {/* Location (extra_drop only) */}
+                                {item.type === "extra_drop" && (
                                   <Input
-                                    value={item.location || ""}
+                                    value={item.location ?? ""}
                                     onChange={(e) => updateLineItem(item.id, "location", e.target.value)}
                                     placeholder="Location"
                                     className="bg-secondary/50 h-9"
                                   />
                                 )}
 
-                                <div className="flex gap-3">
+                                {/* Tonnage */}
+                                <Select
+                                  value={item.tonnage ?? ""}
+                                  onValueChange={(v) => updateLineItem(item.id, "tonnage", v)}
+                                >
+                                  <SelectTrigger className="bg-secondary/50 h-9 text-xs">
+                                    <SelectValue placeholder="T (Tonnage)" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="1T">1T</SelectItem>
+                                    <SelectItem value="2T">2T</SelectItem>
+                                    <SelectItem value="3T">3T</SelectItem>
+                                    <SelectItem value="5T">5T</SelectItem>
+                                    <SelectItem value="10T">10T</SelectItem>
+                                    <SelectItem value="15T">15T</SelectItem>
+                                    <SelectItem value="20T">20T</SelectItem>
+                                    <SelectItem value="25T">25T</SelectItem>
+                                    <SelectItem value="30T">30T</SelectItem>
+                                    <SelectItem value="40T">40T</SelectItem>
+                                  </SelectContent>
+                                </Select>
+
+                                {/* Qty / Price / Amount */}
+                                <div className="flex gap-2">
                                   <div className="w-20">
                                     <Input
                                       type="number"
-                                      value={item.quantity}
-                                      onChange={(e) => updateLineItem(item.id, "quantity", parseInt(e.target.value) || 1)}
+                                      value={item.quantity === 0 ? "" : item.quantity}
+                                      onChange={(e) => updateLineItem(item.id, "quantity", parseInt(e.target.value) || 0)}
+                                      onBlur={(e) => { if (!parseInt(e.target.value)) updateLineItem(item.id, "quantity", 1); }}
                                       placeholder="Qty"
                                       min={1}
                                       className="bg-secondary/50 h-9"
@@ -1495,67 +1459,52 @@ const InvoicesPage = () => {
                                       type="number"
                                       value={item.price || ""}
                                       onChange={(e) => updateLineItem(item.id, "price", parseFloat(e.target.value) || 0)}
-                                      placeholder="Price"
+                                      placeholder="Rate (₦)"
                                       className="bg-secondary/50 h-9"
                                     />
                                   </div>
-                                  <div className="flex items-center min-w-[100px] text-right font-semibold">
+                                  <div className="flex items-center min-w-[90px] text-right text-sm font-semibold">
                                     {formatCurrency(item.quantity * item.price)}
+                                  </div>
+                                </div>
+
+                                {/* Per-item VAT type */}
+                                <div className="flex gap-2 items-center">
+                                  <div className="flex-1">
+                                    <Select
+                                      value={item.vatType ?? "none"}
+                                      onValueChange={(v) => updateLineItem(item.id, "vatType", v as LineItem["vatType"])}
+                                    >
+                                      <SelectTrigger className="bg-secondary/50 h-9 text-xs">
+                                        <SelectValue placeholder="Tax type" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="none">No VAT</SelectItem>
+                                        <SelectItem value="inclusive">VAT Inclusive (7.5%)</SelectItem>
+                                        <SelectItem value="exclusive">VAT Exclusive (+7.5%)</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                  <div className="flex-1">
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      step="any"
+                                      value={item.serviceCharge === 0 ? "" : (item.serviceCharge ?? "")}
+                                      onChange={(e) => updateLineItem(item.id, "serviceCharge", parseFloat(e.target.value) || 0)}
+                                      placeholder="Service charge (₦)"
+                                      className="bg-secondary/50 h-9 text-xs"
+                                    />
                                   </div>
                                 </div>
                               </div>
                             ))}
                           </div>
                         </div>
-
-                        {/* Tax Type Selection */}
-                        <div className="space-y-2 pt-2">
-                          <Label>Tax Type</Label>
-                          <Select
-                            value={formData.tax_type}
-                            onValueChange={(value: "none" | "inclusive" | "exclusive") =>
-                              setFormData(prev => ({ ...prev, tax_type: value }))
-                            }
-                          >
-                            <SelectTrigger className="bg-secondary/50">
-                              <SelectValue placeholder="Select tax type" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">No Tax</SelectItem>
-                              <SelectItem value="inclusive">Tax Inclusive (7.5% VAT included)</SelectItem>
-                              <SelectItem value="exclusive">Tax Exclusive (7.5% VAT added)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          {formData.tax_type !== "none" && invoiceTotals.fuelAmount > 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              Note: Fuel charges (₦{invoiceTotals.fuelAmount.toLocaleString()}) are not subject to VAT
-                            </p>
-                          )}
-                        </div>
-
-                        {/* Service Charge */}
-                        <div className="space-y-2 pt-2">
-                          <Label htmlFor="service_charge">
-                            Service Charge (Optional)
-                            {formData.tax_type !== "none" && (
-                              <span className="text-xs text-muted-foreground ml-1">— VAT applies</span>
-                            )}
-                          </Label>
-                          <Input
-                            id="service_charge"
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={formData.service_charge}
-                            onChange={(e) => setFormData(prev => ({ ...prev, service_charge: e.target.value }))}
-                            placeholder="e.g. 5000"
-                            className="bg-secondary/50"
-                          />
-                        </div>
                       </div>
                     </div>
 
-                    {/* Right Side - Preview (Zoho-style format) */}
+                    {/* Right Side - Preview */}
                     <div className="w-full lg:w-[380px] bg-white p-4 border-t lg:border-t-0 lg:border-l border-border/30 overflow-y-auto min-h-0">
                       {loadingCompanySettings ? (
                         <div className="flex items-center justify-center h-full">
@@ -1563,190 +1512,121 @@ const InvoicesPage = () => {
                         </div>
                       ) : (
                         <div className="bg-white text-gray-900 text-xs" style={{ fontFamily: "Arial, sans-serif" }}>
-                          {/* Header Section */}
+                          {/* Header */}
                           <div className="flex justify-between items-start mb-4">
-                            {/* Company Logo */}
                             <div className="flex-shrink-0">
                               {companyProfile?.company_logo ? (
-                                <img
-                                  src={companyProfile.company_logo}
-                                  alt="Company Logo"
-                                  className="max-w-[80px] max-h-[50px] object-contain"
-                                />
+                                <img src={companyProfile.company_logo} alt="Company Logo" className="max-w-[120px] max-h-[80px] object-contain" />
                               ) : (
-                                <div className="w-[60px] h-[40px] bg-gradient-to-br from-orange-400 to-orange-600 rounded flex items-center justify-center">
-                                  <span className="text-white text-sm font-bold">
-                                    {companyProfile?.company_name?.charAt(0) || "C"}
-                                  </span>
+                                <div className="w-[80px] h-[55px] bg-gradient-to-br from-orange-400 to-orange-600 rounded flex items-center justify-center">
+                                  <span className="text-white text-lg font-bold">{companyProfile?.company_name?.charAt(0) || "C"}</span>
                                 </div>
                               )}
                             </div>
-
-                            {/* Invoice Title */}
                             <div className="text-right">
                               <h1 className="text-xl font-light text-gray-700">Invoice</h1>
                               <p className="text-gray-500 text-[10px]"># INV-{new Date().getFullYear()}-XXX</p>
                               <div className="mt-2">
                                 <p className="text-[9px] text-gray-500 uppercase">Balance Due</p>
-                                <p className="text-sm font-semibold text-gray-900">
-                                  NGN{Math.round(invoiceTotals.total).toLocaleString()}.00
-                                </p>
+                                <p className="text-sm font-semibold text-gray-900">NGN{Math.round(invoiceTotals.total).toLocaleString()}.00</p>
                               </div>
                             </div>
                           </div>
-
                           {/* Company Details */}
                           <div className="mb-3 text-[10px]">
-                            <p className="font-semibold text-gray-900">
-                              {companyProfile?.company_name || "Your Company Name"}
-                            </p>
-                            {companyProfile?.company_address && (
-                              <p className="text-gray-600">{companyProfile.company_address}</p>
-                            )}
-                            {companyProfile?.company_phone && (
-                              <p className="text-gray-600">{companyProfile.company_phone}</p>
-                            )}
-                            {companyProfile?.company_email && (
-                              <p className="text-gray-600">{companyProfile.company_email}</p>
-                            )}
-                            {companyProfile?.website && (
-                              <p className="text-gray-600">{companyProfile.website}</p>
-                            )}
+                            <p className="font-semibold text-gray-900">{companyProfile?.company_name || "Your Company Name"}</p>
+                            {companyProfile?.company_address && <p className="text-gray-600">{companyProfile.company_address}</p>}
+                            {companyProfile?.company_phone && <p className="text-gray-600">{companyProfile.company_phone}</p>}
+                            {companyProfile?.company_email && <p className="text-gray-600">{companyProfile.company_email}</p>}
                           </div>
-
-                          {/* Bill To and Invoice Info */}
+                          {/* Bill To / Meta */}
                           <div className="flex justify-between mb-4">
-                            <div>
-                              <p className="font-semibold text-gray-900">
-                                {selectedCustomer?.company_name || "Select customer"}
-                              </p>
-                            </div>
+                            <p className="font-semibold text-gray-900">{selectedCustomer?.company_name || "Select customer"}</p>
                             <div className="text-right text-[10px]">
-                              <div className="flex justify-end gap-2">
-                                <span className="text-gray-500">Invoice Date :</span>
-                                <span className="text-gray-900">{new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
-                              </div>
-                              <div className="flex justify-end gap-2">
-                                <span className="text-gray-500">Terms :</span>
-                                <span className="text-gray-900">Due on Receipt</span>
-                              </div>
-                              <div className="flex justify-end gap-2">
-                                <span className="text-gray-500">Due Date :</span>
-                                <span className="text-gray-900">{formData.due_date ? new Date(formData.due_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span>
-                              </div>
+                              <div className="flex justify-end gap-2"><span className="text-gray-500">Invoice Date :</span><span className="text-gray-900">{new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
+                              <div className="flex justify-end gap-2"><span className="text-gray-500">Due Date :</span><span className="text-gray-900">{formData.due_date ? new Date(formData.due_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
                             </div>
                           </div>
-
                           {/* Items Table */}
                           <div className="mb-3">
                             <table className="w-full border-collapse text-[10px]">
                               <thead>
-                                <tr className="border-t border-b border-gray-300 bg-gray-50">
-                                  <th className="text-left py-2 px-2 text-gray-600 font-medium w-6">#</th>
-                                  <th className="text-left py-2 px-2 text-gray-600 font-medium">Description</th>
-                                  <th className="text-center py-2 px-1 text-gray-600 font-medium w-10">Qty</th>
-                                  <th className="text-right py-2 px-1 text-gray-600 font-medium w-16">Rate</th>
-                                  <th className="text-right py-2 px-2 text-gray-600 font-medium w-20">Amount</th>
+                                <tr style={{ backgroundColor: "#2d2d2d" }}>
+                                  <th className="text-left py-2 px-1 text-white font-medium w-5">#</th>
+                                  <th className="text-left py-2 px-1 text-white font-medium">Description</th>
+                                  <th className="text-center py-2 px-1 text-white font-medium w-10">T</th>
+                                  <th className="text-center py-2 px-1 text-white font-medium w-8">Qty</th>
+                                  <th className="text-right py-2 px-1 text-white font-medium w-14">Rate</th>
+                                  <th className="text-right py-2 px-1 text-white font-medium w-16">Amount</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {lineItems.map((item, index) => (
                                   <tr key={item.id} className="border-b border-gray-200">
-                                    <td className="py-2 px-2 text-gray-900 align-top">{index + 1}</td>
-                                    <td className="py-2 px-2 text-gray-900">
+                                    <td className="py-1 px-1 text-gray-900 align-top">{index + 1}</td>
+                                    <td className="py-1 px-1 text-gray-900">
                                       <div className="font-medium">{item.description}</div>
-                                      {item.location && (
-                                        <div className="text-gray-500 text-[9px]">{item.location}</div>
-                                      )}
+                                      {item.location && <div className="text-gray-500 text-[9px]">{item.location}</div>}
+                                      {item.serviceCharge && item.serviceCharge > 0 && <div className="text-gray-500 text-[9px]">SC: ₦{item.serviceCharge.toLocaleString()}</div>}
+                                      {item.vatType && item.vatType !== "none" && <div className="text-gray-400 text-[9px]">VAT {item.vatType}</div>}
                                     </td>
-                                    <td className="py-2 px-1 text-gray-900 text-center">{item.quantity.toFixed(2)}</td>
-                                    <td className="py-2 px-1 text-gray-900 text-right">{item.price.toLocaleString()}.00</td>
-                                    <td className="py-2 px-2 text-gray-900 text-right">{(item.quantity * item.price).toLocaleString()}.00</td>
+                                    <td className="py-1 px-1 text-gray-900 text-center">{item.tonnage || "—"}</td>
+                                    <td className="py-1 px-1 text-gray-900 text-center">{item.quantity.toFixed(2)}</td>
+                                    <td className="py-1 px-1 text-gray-900 text-right">{item.price.toLocaleString()}</td>
+                                    <td className="py-1 px-1 text-gray-900 text-right">{(item.quantity * item.price).toLocaleString()}</td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
                           </div>
-
-                          {/* Totals Section */}
+                          {/* Totals */}
                           <div className="flex justify-end mb-4">
-                            <table className="w-[180px] text-[10px]">
+                            <table className="w-[185px] text-[10px]">
                               <tbody>
                                 <tr>
                                   <td className="py-1 text-right text-gray-600">Sub Total</td>
-                                  <td className="py-1 text-right text-gray-900 pl-4">
-                                    {invoiceTotals.lineSubtotal.toLocaleString()}.00
-                                  </td>
+                                  <td className="py-1 text-right text-gray-900 pl-4">{invoiceTotals.lineSubtotal.toLocaleString()}.00</td>
                                 </tr>
-                                {invoiceTotals.serviceCharge > 0 && (
+                                {invoiceTotals.totalServiceCharge > 0 && (
                                   <tr>
-                                    <td className="py-1 text-right text-gray-600">
-                                      Service Charge
-                                      {formData.tax_type !== "none" && (
-                                        <div className="text-[9px] text-gray-400">(VAT applies)</div>
-                                      )}
-                                    </td>
-                                    <td className="py-1 text-right text-gray-900 pl-4">
-                                      {Math.round(invoiceTotals.serviceCharge).toLocaleString()}.00
-                                    </td>
+                                    <td className="py-1 text-right text-gray-600">Service Charges</td>
+                                    <td className="py-1 text-right text-gray-900 pl-4">{Math.round(invoiceTotals.totalServiceCharge).toLocaleString()}.00</td>
                                   </tr>
                                 )}
-                                {formData.tax_type !== "none" && invoiceTotals.vatAmount > 0 && (
+                                {invoiceTotals.vatAmount > 0 && (
                                   <tr>
                                     <td className="py-1 text-right text-gray-600">VAT (7.5%)</td>
-                                    <td className="py-1 text-right text-gray-900 pl-4">
-                                      {Math.round(invoiceTotals.vatAmount).toLocaleString()}.00
-                                    </td>
+                                    <td className="py-1 text-right text-gray-900 pl-4">{Math.round(invoiceTotals.vatAmount).toLocaleString()}.00</td>
                                   </tr>
                                 )}
                                 <tr className="border-t border-gray-300">
                                   <td className="py-2 text-right font-semibold text-gray-900">Total</td>
-                                  <td className="py-2 text-right font-semibold text-gray-900 pl-4">
-                                    NGN{Math.round(invoiceTotals.total).toLocaleString()}.00
-                                  </td>
+                                  <td className="py-2 text-right font-semibold text-gray-900 pl-4">NGN{Math.round(invoiceTotals.total).toLocaleString()}.00</td>
                                 </tr>
                                 <tr className="bg-gray-100">
                                   <td className="py-2 px-2 text-right font-semibold text-gray-900">Balance Due</td>
-                                  <td className="py-2 px-2 text-right font-bold text-gray-900">
-                                    NGN{Math.round(invoiceTotals.total).toLocaleString()}.00
-                                  </td>
+                                  <td className="py-2 px-2 text-right font-bold text-gray-900">NGN{Math.round(invoiceTotals.total).toLocaleString()}.00</td>
                                 </tr>
                               </tbody>
                             </table>
                           </div>
-
-                          {/* Bank Details */}
                           {bankDetails && (
                             <div className="mb-4 text-[10px]">
                               <p className="text-gray-900">{bankDetails.account_number}</p>
                               <p className="text-gray-600">{bankDetails.bank_name}</p>
                             </div>
                           )}
-
-                          {/* Footer - Signature and TIN */}
                           <div className="border-t border-gray-200 pt-3">
                             <div className="flex justify-between items-end">
                               <div className="text-[10px]">
-                                {companyProfile?.company_name && (
-                                  <p className="text-gray-600">{companyProfile.company_name}</p>
-                                )}
-                                {companyProfile?.tin_number && (
-                                  <p className="text-gray-600">TIN - {companyProfile.tin_number}</p>
-                                )}
+                                {companyProfile?.company_name && <p className="text-gray-600">{companyProfile.company_name}</p>}
+                                {companyProfile?.tin_number && <p className="text-gray-600">TIN - {companyProfile.tin_number}</p>}
                               </div>
                               <div className="text-center">
                                 {companyProfile?.authorized_signature && (
-                                  <div className="mb-1">
-                                    <img
-                                      src={companyProfile.authorized_signature}
-                                      alt="Authorized Signature"
-                                      className="max-h-8 object-contain mx-auto"
-                                    />
-                                  </div>
+                                  <div className="mb-1"><img src={companyProfile.authorized_signature} alt="Authorized Signature" className="max-h-8 object-contain mx-auto" /></div>
                                 )}
-                                <p className="text-[9px] text-gray-600 border-t border-gray-300 pt-1">
-                                  For {companyProfile?.company_name || "Company"}
-                                </p>
+                                <p className="text-[9px] text-gray-600 border-t border-gray-300 pt-1">For {companyProfile?.company_name || "Company"}</p>
                               </div>
                             </div>
                           </div>
@@ -1954,6 +1834,18 @@ const InvoicesPage = () => {
               </DialogHeader>
 
               <div className="space-y-5">
+                {/* Invoice Number */}
+                <div className="space-y-2">
+                  <Label htmlFor="edit_invoice_number">Invoice Number *</Label>
+                  <Input
+                    id="edit_invoice_number"
+                    value={formData.invoice_number}
+                    onChange={(e) => setFormData(prev => ({ ...prev, invoice_number: e.target.value }))}
+                    placeholder="e.g. INV-2025-001"
+                    className="bg-secondary/50"
+                  />
+                </div>
+
                 {/* Customer Selection */}
                 <div className="space-y-2">
                   <Label htmlFor="edit_customer_id">Customer *</Label>
@@ -2016,7 +1908,7 @@ const InvoicesPage = () => {
 
                   <div className="space-y-3">
                     {lineItems.map((item) => (
-                      <div key={item.id} className="p-3 rounded-lg border border-border/50 bg-secondary/20 space-y-3">
+                      <div key={item.id} className="p-3 rounded-lg border border-border/50 bg-secondary/20 space-y-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             {item.type === "delivery" && <Truck className="w-4 h-4 text-primary" />}
@@ -2031,92 +1923,52 @@ const InvoicesPage = () => {
                             </Button>
                           )}
                         </div>
-                        <Input
-                          value={item.description}
-                          onChange={(e) => updateLineItem(item.id, "description", e.target.value)}
-                          placeholder="Description"
-                          className="bg-secondary/50 h-9"
-                        />
+                        <Input value={item.description} onChange={(e) => updateLineItem(item.id, "description", e.target.value)} placeholder="Description" className="bg-secondary/50 h-9" />
                         {item.type === "extra_drop" && (
-                          <Input
-                            value={item.location || ""}
-                            onChange={(e) => updateLineItem(item.id, "location", e.target.value)}
-                            placeholder="Location"
-                            className="bg-secondary/50 h-9"
-                          />
+                          <Input value={item.location ?? ""} onChange={(e) => updateLineItem(item.id, "location", e.target.value)} placeholder="Location" className="bg-secondary/50 h-9" />
                         )}
-                        <div className="flex gap-3">
+                        <Select value={item.tonnage ?? ""} onValueChange={(v) => updateLineItem(item.id, "tonnage", v)}>
+                          <SelectTrigger className="bg-secondary/50 h-9 text-xs"><SelectValue placeholder="T (Tonnage)" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1T">1T</SelectItem>
+                            <SelectItem value="2T">2T</SelectItem>
+                            <SelectItem value="3T">3T</SelectItem>
+                            <SelectItem value="5T">5T</SelectItem>
+                            <SelectItem value="10T">10T</SelectItem>
+                            <SelectItem value="15T">15T</SelectItem>
+                            <SelectItem value="20T">20T</SelectItem>
+                            <SelectItem value="25T">25T</SelectItem>
+                            <SelectItem value="30T">30T</SelectItem>
+                            <SelectItem value="40T">40T</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <div className="flex gap-2">
                           <div className="w-20">
-                            <Input
-                              type="number"
-                              value={item.quantity}
-                              onChange={(e) => updateLineItem(item.id, "quantity", parseInt(e.target.value) || 1)}
-                              placeholder="Qty"
-                              min={1}
-                              className="bg-secondary/50 h-9"
-                            />
+                            <Input type="number" value={item.quantity === 0 ? "" : item.quantity} onChange={(e) => updateLineItem(item.id, "quantity", parseInt(e.target.value) || 0)} onBlur={(e) => { if (!parseInt(e.target.value)) updateLineItem(item.id, "quantity", 1); }} placeholder="Qty" min={1} className="bg-secondary/50 h-9" />
                           </div>
                           <div className="flex-1">
-                            <Input
-                              type="number"
-                              value={item.price || ""}
-                              onChange={(e) => updateLineItem(item.id, "price", parseFloat(e.target.value) || 0)}
-                              placeholder="Price"
-                              className="bg-secondary/50 h-9"
-                            />
+                            <Input type="number" value={item.price || ""} onChange={(e) => updateLineItem(item.id, "price", parseFloat(e.target.value) || 0)} placeholder="Rate (₦)" className="bg-secondary/50 h-9" />
                           </div>
-                          <div className="flex items-center min-w-[100px] text-right font-semibold">
-                            {formatCurrency(item.quantity * item.price)}
+                          <div className="flex items-center min-w-[90px] text-right text-sm font-semibold">{formatCurrency(item.quantity * item.price)}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <Select value={item.vatType ?? "none"} onValueChange={(v) => updateLineItem(item.id, "vatType", v as LineItem["vatType"])}>
+                              <SelectTrigger className="bg-secondary/50 h-9 text-xs"><SelectValue placeholder="Tax type" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">No VAT</SelectItem>
+                                <SelectItem value="inclusive">VAT Inclusive (7.5%)</SelectItem>
+                                <SelectItem value="exclusive">VAT Exclusive (+7.5%)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="flex-1">
+                            <Input type="number" min="0" step="any" value={item.serviceCharge === 0 ? "" : (item.serviceCharge ?? "")} onChange={(e) => updateLineItem(item.id, "serviceCharge", parseFloat(e.target.value) || 0)} placeholder="Service charge (₦)" className="bg-secondary/50 h-9 text-xs" />
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
-                </div>
-
-                {/* Tax Type */}
-                <div className="space-y-2 pt-2">
-                  <Label>Tax Type</Label>
-                  <Select
-                    value={formData.tax_type}
-                    onValueChange={(value: "none" | "inclusive" | "exclusive") =>
-                      setFormData(prev => ({ ...prev, tax_type: value }))
-                    }
-                  >
-                    <SelectTrigger className="bg-secondary/50">
-                      <SelectValue placeholder="Select tax type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">No Tax</SelectItem>
-                      <SelectItem value="inclusive">Tax Inclusive (7.5% VAT included)</SelectItem>
-                      <SelectItem value="exclusive">Tax Exclusive (7.5% VAT added)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {formData.tax_type !== "none" && invoiceTotals.fuelAmount > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Note: Fuel charges (₦{invoiceTotals.fuelAmount.toLocaleString()}) are not subject to VAT
-                    </p>
-                  )}
-                </div>
-
-                {/* Service Charge */}
-                <div className="space-y-2 pt-2">
-                  <Label htmlFor="edit_service_charge">
-                    Service Charge (Optional)
-                    {formData.tax_type !== "none" && (
-                      <span className="text-xs text-muted-foreground ml-1">— VAT applies</span>
-                    )}
-                  </Label>
-                  <Input
-                    id="edit_service_charge"
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={formData.service_charge}
-                    onChange={(e) => setFormData(prev => ({ ...prev, service_charge: e.target.value }))}
-                    placeholder="e.g. 5000"
-                    className="bg-secondary/50"
-                  />
                 </div>
 
                 {/* Due Date */}
@@ -2156,10 +2008,10 @@ const InvoicesPage = () => {
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex-shrink-0">
                       {companyProfile?.company_logo ? (
-                        <img src={companyProfile.company_logo} alt="Company Logo" className="max-w-[80px] max-h-[50px] object-contain" />
+                        <img src={companyProfile.company_logo} alt="Company Logo" className="max-w-[120px] max-h-[80px] object-contain" />
                       ) : (
-                        <div className="w-[60px] h-[40px] bg-gradient-to-br from-orange-400 to-orange-600 rounded flex items-center justify-center">
-                          <span className="text-white text-sm font-bold">{companyProfile?.company_name?.charAt(0) || "C"}</span>
+                        <div className="w-[80px] h-[55px] bg-gradient-to-br from-orange-400 to-orange-600 rounded flex items-center justify-center">
+                          <span className="text-white text-lg font-bold">{companyProfile?.company_name?.charAt(0) || "C"}</span>
                         </div>
                       )}
                     </div>
@@ -2179,64 +2031,57 @@ const InvoicesPage = () => {
                     {companyProfile?.company_email && <p className="text-gray-600">{companyProfile.company_email}</p>}
                   </div>
                   <div className="flex justify-between mb-4">
-                    <div>
-                      <p className="font-semibold text-gray-900">{selectedCustomer?.company_name || customers.find(c => c.id === formData.customer_id)?.company_name || "Select customer"}</p>
-                    </div>
+                    <p className="font-semibold text-gray-900">{customers.find(c => c.id === formData.customer_id)?.company_name || "Select customer"}</p>
                     <div className="text-right text-[10px]">
-                      <div className="flex justify-end gap-2">
-                        <span className="text-gray-500">Invoice Date :</span>
-                        <span className="text-gray-900">{editingInvoice ? new Date(editingInvoice.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span>
-                      </div>
-                      <div className="flex justify-end gap-2">
-                        <span className="text-gray-500">Due Date :</span>
-                        <span className="text-gray-900">{formData.due_date ? new Date(formData.due_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span>
-                      </div>
+                      <div className="flex justify-end gap-2"><span className="text-gray-500">Invoice Date :</span><span className="text-gray-900">{editingInvoice ? new Date(editingInvoice.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+                      <div className="flex justify-end gap-2"><span className="text-gray-500">Due Date :</span><span className="text-gray-900">{formData.due_date ? new Date(formData.due_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
                     </div>
                   </div>
                   <div className="mb-3">
                     <table className="w-full border-collapse text-[10px]">
                       <thead>
-                        <tr className="border-t border-b border-gray-300 bg-gray-50">
-                          <th className="text-left py-2 px-2 text-gray-600 font-medium w-6">#</th>
-                          <th className="text-left py-2 px-2 text-gray-600 font-medium">Description</th>
-                          <th className="text-center py-2 px-1 text-gray-600 font-medium w-10">Qty</th>
-                          <th className="text-right py-2 px-1 text-gray-600 font-medium w-16">Rate</th>
-                          <th className="text-right py-2 px-2 text-gray-600 font-medium w-20">Amount</th>
+                        <tr style={{ backgroundColor: "#2d2d2d" }}>
+                          <th className="text-left py-2 px-1 text-white font-medium w-5">#</th>
+                          <th className="text-left py-2 px-1 text-white font-medium">Description</th>
+                          <th className="text-center py-2 px-1 text-white font-medium w-10">T</th>
+                          <th className="text-center py-2 px-1 text-white font-medium w-8">Qty</th>
+                          <th className="text-right py-2 px-1 text-white font-medium w-14">Rate</th>
+                          <th className="text-right py-2 px-1 text-white font-medium w-16">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
                         {lineItems.map((item, index) => (
                           <tr key={item.id} className="border-b border-gray-200">
-                            <td className="py-2 px-2 text-gray-900 align-top">{index + 1}</td>
-                            <td className="py-2 px-2 text-gray-900">
+                            <td className="py-1 px-1 text-gray-900 align-top">{index + 1}</td>
+                            <td className="py-1 px-1 text-gray-900">
                               <div className="font-medium">{item.description}</div>
                               {item.location && <div className="text-gray-500 text-[9px]">{item.location}</div>}
+                              {item.serviceCharge && item.serviceCharge > 0 && <div className="text-gray-500 text-[9px]">SC: ₦{item.serviceCharge.toLocaleString()}</div>}
+                              {item.vatType && item.vatType !== "none" && <div className="text-gray-400 text-[9px]">VAT {item.vatType}</div>}
                             </td>
-                            <td className="py-2 px-1 text-gray-900 text-center">{item.quantity.toFixed(2)}</td>
-                            <td className="py-2 px-1 text-gray-900 text-right">{item.price.toLocaleString()}.00</td>
-                            <td className="py-2 px-2 text-gray-900 text-right">{(item.quantity * item.price).toLocaleString()}.00</td>
+                            <td className="py-1 px-1 text-gray-900 text-center">{item.tonnage || "—"}</td>
+                            <td className="py-1 px-1 text-gray-900 text-center">{item.quantity.toFixed(2)}</td>
+                            <td className="py-1 px-1 text-gray-900 text-right">{item.price.toLocaleString()}</td>
+                            <td className="py-1 px-1 text-gray-900 text-right">{(item.quantity * item.price).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                   <div className="flex justify-end mb-4">
-                    <table className="w-[180px] text-[10px]">
+                    <table className="w-[185px] text-[10px]">
                       <tbody>
                         <tr>
                           <td className="py-1 text-right text-gray-600">Sub Total</td>
                           <td className="py-1 text-right text-gray-900 pl-4">{invoiceTotals.lineSubtotal.toLocaleString()}.00</td>
                         </tr>
-                        {invoiceTotals.serviceCharge > 0 && (
+                        {invoiceTotals.totalServiceCharge > 0 && (
                           <tr>
-                            <td className="py-1 text-right text-gray-600">
-                              Service Charge
-                              {formData.tax_type !== "none" && <div className="text-[9px] text-gray-400">(VAT applies)</div>}
-                            </td>
-                            <td className="py-1 text-right text-gray-900 pl-4">{Math.round(invoiceTotals.serviceCharge).toLocaleString()}.00</td>
+                            <td className="py-1 text-right text-gray-600">Service Charges</td>
+                            <td className="py-1 text-right text-gray-900 pl-4">{Math.round(invoiceTotals.totalServiceCharge).toLocaleString()}.00</td>
                           </tr>
                         )}
-                        {formData.tax_type !== "none" && invoiceTotals.vatAmount > 0 && (
+                        {invoiceTotals.vatAmount > 0 && (
                           <tr>
                             <td className="py-1 text-right text-gray-600">VAT (7.5%)</td>
                             <td className="py-1 text-right text-gray-900 pl-4">{Math.round(invoiceTotals.vatAmount).toLocaleString()}.00</td>
@@ -2253,12 +2098,7 @@ const InvoicesPage = () => {
                       </tbody>
                     </table>
                   </div>
-                  {bankDetails && (
-                    <div className="mb-4 text-[10px]">
-                      <p className="text-gray-900">{bankDetails.account_number}</p>
-                      <p className="text-gray-600">{bankDetails.bank_name}</p>
-                    </div>
-                  )}
+                  {bankDetails && <div className="mb-4 text-[10px]"><p className="text-gray-900">{bankDetails.account_number}</p><p className="text-gray-600">{bankDetails.bank_name}</p></div>}
                   <div className="border-t border-gray-200 pt-3">
                     <div className="flex justify-between items-end">
                       <div className="text-[10px]">
@@ -2266,11 +2106,7 @@ const InvoicesPage = () => {
                         {companyProfile?.tin_number && <p className="text-gray-600">TIN - {companyProfile.tin_number}</p>}
                       </div>
                       <div className="text-center">
-                        {companyProfile?.authorized_signature && (
-                          <div className="mb-1">
-                            <img src={companyProfile.authorized_signature} alt="Authorized Signature" className="max-h-8 object-contain mx-auto" />
-                          </div>
-                        )}
+                        {companyProfile?.authorized_signature && <div className="mb-1"><img src={companyProfile.authorized_signature} alt="Authorized Signature" className="max-h-8 object-contain mx-auto" /></div>}
                         <p className="text-[9px] text-gray-600 border-t border-gray-300 pt-1">For {companyProfile?.company_name || "Company"}</p>
                       </div>
                     </div>

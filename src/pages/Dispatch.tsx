@@ -44,6 +44,7 @@ import {
   Clock,
   CheckCircle,
   XCircle,
+  Save,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -78,6 +79,34 @@ import FinancialDetailsForm from "@/components/transactions/FinancialDetailsForm
 import HistoricalDataView, { HistoricalInvoiceData } from "@/components/dispatch/HistoricalDataView";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
+
+const PRE_TRIP_CHECKLIST = [
+  { section: "Driver & Documents", items: ["Valid driver's licence", "Vehicle registration & insurance", "Waybill / delivery documents", "Roadworthiness certificate", "Trip authorization"] },
+  { section: "Engine Compartment", items: ["Engine oil level", "Coolant level", "Brake fluid", "Power steering fluid", "No oil/fuel/coolant leaks", "Belts & hoses secure"] },
+  { section: "Exterior & Body", items: ["No visible body damage", "Mirrors properly adjusted", "Windshield clean, no cracks", "Wipers functional", "Number plates intact", "Diesel tank and cover"] },
+  { section: "Tyres & Wheels", items: ["Tyre pressure (all tyres)", "Adequate tread depth", "No cuts/bulges/exposed cords", "Wheel nuts tight", "Spare tyre available and inflated"] },
+  { section: "Lights & Electrical", items: ["Headlights (high & low beam)", "Tail lights", "Brake lights", "Indicators / hazard lights", "Reverse lights", "Horn functional"] },
+  { section: "Braking System", items: ["Service brakes working", "Hand/parking brake holding", "Air pressure (air brake systems)", "No unusual noises"] },
+  { section: "Fuel System", items: ["Fuel level sufficient for trip", "Fuel cap secure", "No leaks"] },
+  { section: "Load & Cargo", items: ["Load properly secured", "Tarpaulin/cover in place", "Weight within legal limit", "Doors and locks secure"] },
+  { section: "Safety Equipment", items: ["Fire extinguisher", "Reflective triangles", "First aid kit", "Wheel chocks", "Warning jacket"] },
+  { section: "Cab Interior", items: ["Seat and seatbelt functional", "Dashboard warning lights normal", "Speedometer & gauges working", "Steering free and responsive"] },
+];
+
+const POST_TRIP_CHECKLIST = [
+  { section: "Vehicle Condition", items: ["New dents, scratches, or damage", "Windshield condition", "Mirrors intact"] },
+  { section: "Tyres & Wheels", items: ["Tyre wear or damage during trip", "Missing wheel nuts", "Spare tyre condition"] },
+  { section: "Brakes & Suspension", items: ["Brake performance during trip", "Unusual vibrations or pulling", "Suspension issues noticed"] },
+  { section: "Engine & Fluids", items: ["Oil or fluid leaks noticed", "Engine overheating during trip", "Warning lights observed"] },
+  { section: "Lights & Electrical", items: ["Any failed bulbs", "Electrical faults noticed"] },
+  { section: "Load & Delivery", items: ["Delivery completed successfully", "Load condition on arrival", "Any cargo damage or shortage", "Proof of delivery obtained"] },
+  { section: "Fuel & Mileage", items: ["Fuel remaining", "Mileage recorded", "Fuel consumption issues"] },
+  { section: "Incidents & Remarks", items: ["Accidents or near misses", "Road or security challenges", "Mechanical complaints", "Recommendations for repair"] },
+];
 
 interface Dropoff {
   id: string;
@@ -221,6 +250,95 @@ const deliveryStatusConfig: Record<string, { icon: React.ElementType; color: str
   cancelled: { icon: XCircle, color: "text-destructive", label: "Cancelled" },
 };
 
+interface TripChecklistPanelProps {
+  sections: { section: string; items: string[] }[];
+  checklistState: Record<string, boolean>;
+  setChecklistState: (fn: (prev: Record<string, boolean>) => Record<string, boolean>) => void;
+  notes: string;
+  setNotes: (v: string) => void;
+  saved: boolean;
+  saving: boolean;
+  onSave: () => void;
+}
+
+const TripChecklistPanel = ({
+  sections,
+  checklistState,
+  setChecklistState,
+  notes,
+  setNotes,
+  saved,
+  saving,
+  onSave,
+}: TripChecklistPanelProps) => {
+  const totalItems = sections.reduce((s, sec) => s + sec.items.length, 0);
+  const checkedItems = Object.values(checklistState).filter(Boolean).length;
+  const pct = totalItems > 0 ? Math.round((checkedItems / totalItems) * 100) : 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Progress value={pct} className="flex-1 h-2" />
+        <span className="text-sm font-medium text-muted-foreground">{checkedItems}/{totalItems}</span>
+        {saved && (
+          <Badge variant="outline" className="text-success border-success text-xs">Saved</Badge>
+        )}
+      </div>
+      <ScrollArea className="h-[400px] pr-2">
+        <Accordion type="multiple" defaultValue={sections.map(s => s.section)} className="space-y-1">
+          {sections.map(sec => (
+            <AccordionItem value={sec.section} key={sec.section} className="border rounded-md px-3">
+              <AccordionTrigger className="text-sm font-semibold py-2 hover:no-underline">
+                <span className="flex items-center gap-2">
+                  {sec.section}
+                  <span className="text-xs font-normal text-muted-foreground">
+                    ({sec.items.filter(item => checklistState[`${sec.section}::${item}`]).length}/{sec.items.length})
+                  </span>
+                </span>
+              </AccordionTrigger>
+              <AccordionContent>
+                <div className="space-y-2 pb-2">
+                  {sec.items.map(item => {
+                    const key = `${sec.section}::${item}`;
+                    return (
+                      <div key={key} className="flex items-center gap-2">
+                        <Checkbox
+                          id={key}
+                          checked={!!checklistState[key]}
+                          onCheckedChange={(v) =>
+                            setChecklistState(prev => ({ ...prev, [key]: v === true }))
+                          }
+                        />
+                        <label htmlFor={key} className="text-sm cursor-pointer leading-tight">
+                          {item}
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          ))}
+        </Accordion>
+      </ScrollArea>
+      <Textarea
+        placeholder="Additional notes or remarks..."
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        rows={3}
+        className="resize-none"
+      />
+      <Button onClick={onSave} disabled={saving} className="w-full">
+        {saving ? (
+          <><span className="w-4 h-4 mr-2 animate-spin border-2 border-current border-t-transparent rounded-full inline-block" />Saving...</>
+        ) : (
+          <><Save className="w-4 h-4 mr-2" />Save Checklist</>
+        )}
+      </Button>
+    </div>
+  );
+};
+
 const DispatchPage = () => {
   const [dispatches, setDispatches] = useState<Dispatch[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -312,6 +430,14 @@ const DispatchPage = () => {
     delivery_commenced_at: "",
   });
   const [editDropoffs, setEditDropoffs] = useState<Dropoff[]>([]);
+  const [selectedEditRouteId, setSelectedEditRouteId] = useState<string>("");
+  const [preInspection, setPreInspection] = useState<Record<string, boolean>>({});
+  const [postInspection, setPostInspection] = useState<Record<string, boolean>>({});
+  const [preInspectionNotes, setPreInspectionNotes] = useState("");
+  const [postInspectionNotes, setPostInspectionNotes] = useState("");
+  const [preInspectionSaved, setPreInspectionSaved] = useState(false);
+  const [postInspectionSaved, setPostInspectionSaved] = useState(false);
+  const [savingInspection, setSavingInspection] = useState(false);
 
   const canManage = hasAnyRole(["admin", "operations", "dispatcher"]);
   const canUpdateStatus = hasAnyRole(["admin", "operations", "dispatcher", "support"]);
@@ -509,20 +635,6 @@ const DispatchPage = () => {
   const handleRouteChange = (routeId: string) => {
     setSelectedRouteId(routeId);
 
-    if (routeId === "none") {
-      // Clear route-related fields to allow manual entry
-      setFormData(prev => ({
-        ...prev,
-        pickup_address: "",
-        delivery_address: "",
-        distance_km: "",
-      }));
-      setPickupCoords(null);
-      setDeliveryCoords(null);
-      setDropoffs([]);
-      return;
-    }
-
     const route = routes.find(r => r.id === routeId);
     if (!route) return;
 
@@ -560,6 +672,28 @@ const DispatchPage = () => {
       title: "Route Applied",
       description: `Loaded "${route.name}" — ${route.origin.split(",")[0]} to ${route.destination.split(",")[0]}${route.waypoints?.length ? ` with ${route.waypoints.length} stop(s)` : ""}`,
     });
+  };
+
+  // Handle route selection in edit form
+  const handleEditRouteChange = (routeId: string) => {
+    setSelectedEditRouteId(routeId);
+    const route = routes.find(r => r.id === routeId);
+    if (!route) return;
+    setEditFormData(prev => ({
+      ...prev,
+      pickup_address: route.origin,
+      delivery_address: route.destination,
+      distance_km: route.distance_km ? route.distance_km.toString() : prev.distance_km,
+    }));
+    if (route.waypoints && route.waypoints.length > 0) {
+      setEditDropoffs(route.waypoints.map((wp, i) => ({
+        id: `wp-${i}-${Date.now()}`,
+        address: wp.address,
+        notes: wp.location_name || "",
+        latitude: wp.latitude || null,
+        longitude: wp.longitude || null,
+      })));
+    }
   };
 
   // Handle delivery address selection from autocomplete
@@ -841,17 +975,50 @@ const DispatchPage = () => {
     }
   };
 
+  // Handle saving pre/post trip inspection checklists
+  const handleSaveInspection = async (type: "pre" | "post") => {
+    if (!selectedDispatch) return;
+    setSavingInspection(true);
+    try {
+      const checklist = type === "pre" ? preInspection : postInspection;
+      const notes = type === "pre" ? preInspectionNotes : postInspectionNotes;
+      const { data: existing } = await (supabase as any)
+        .from("vehicle_inspections")
+        .select("id")
+        .eq("dispatch_id", selectedDispatch.id)
+        .eq("type", type)
+        .maybeSingle();
+      if (existing) {
+        await (supabase as any)
+          .from("vehicle_inspections")
+          .update({ checklist, notes, submitted_by: user?.id, submitted_at: new Date().toISOString() })
+          .eq("id", existing.id);
+      } else {
+        await (supabase as any)
+          .from("vehicle_inspections")
+          .insert([{ dispatch_id: selectedDispatch.id, type, checklist, notes, submitted_by: user?.id }]);
+      }
+      if (type === "pre") setPreInspectionSaved(true);
+      else setPostInspectionSaved(true);
+      toast({ title: `${type === "pre" ? "Pre" : "Post"}-trip checklist saved successfully` });
+    } catch {
+      toast({ title: "Failed to save checklist", variant: "destructive" });
+    } finally {
+      setSavingInspection(false);
+    }
+  };
+
   // Handle dispatch deletion
   const handleDeleteDispatch = async () => {
     if (!dispatchToDelete) return;
 
     setDeleting(true);
     try {
-      // First delete related records (dropoffs, etc.)
-      await supabase
-        .from("dispatch_dropoffs")
-        .delete()
-        .eq("dispatch_id", dispatchToDelete.id);
+      // Delete all related records before deleting the dispatch
+      await supabase.from("dispatch_dropoffs").delete().eq("dispatch_id", dispatchToDelete.id);
+      await (supabase as any).from("vehicle_inspections").delete().eq("dispatch_id", dispatchToDelete.id);
+      await supabase.from("delivery_updates").delete().eq("dispatch_id", dispatchToDelete.id);
+      await (supabase as any).from("email_notifications").delete().eq("dispatch_id", dispatchToDelete.id);
 
       // If this is a historical dispatch, also delete the linked historical_invoice_data
       if (dispatchToDelete.is_historical && dispatchToDelete.historical_transaction_id) {
@@ -1035,7 +1202,7 @@ const DispatchPage = () => {
     // Fetch existing dropoffs
     const existingDropoffs = await fetchDispatchDropoffs(dispatch.id);
     setEditDropoffs(existingDropoffs);
-    
+    setSelectedEditRouteId(dispatch.route_id || "");
     setIsEditDialogOpen(true);
   };
 
@@ -1282,17 +1449,16 @@ const DispatchPage = () => {
                 </div>
                 {/* Route Selection */}
                 <div className="space-y-2">
-                  <Label>Route (Optional)</Label>
+                  <Label>Route *</Label>
                   <Select
-                    value={selectedRouteId || "none"}
+                    value={selectedRouteId || ""}
                     onValueChange={handleRouteChange}
                   >
                     <SelectTrigger className="bg-secondary/50">
                       <Route className="w-4 h-4 mr-2" />
-                      <SelectValue placeholder="Select a route or enter addresses manually" />
+                      <SelectValue placeholder="Select a route..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">No Route — Enter addresses manually</SelectItem>
                       {routes.map((route) => (
                         <SelectItem key={route.id} value={route.id}>
                           {route.name} ({route.origin.split(",")[0]} → {route.destination.split(",")[0]})
@@ -1302,7 +1468,7 @@ const DispatchPage = () => {
                       ))}
                     </SelectContent>
                   </Select>
-                  {selectedRouteId && selectedRouteId !== "none" && (
+                  {selectedRouteId && (
                     <p className="text-xs text-muted-foreground">
                       Addresses and drop-off points have been auto-filled from the selected route.
                     </p>
@@ -1311,40 +1477,22 @@ const DispatchPage = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="pickup_address">Pickup Address *</Label>
+                    <Label>Pickup Address</Label>
                     <Input
-                      id="pickup_address"
-                      name="pickup_address"
                       value={formData.pickup_address}
-                      onChange={handleInputChange}
-                      placeholder="Pickup location (auto-filled from customer or route)"
-                      className="bg-secondary/50"
-                      disabled={!!(selectedRouteId && selectedRouteId !== "none") || !!(formData.customer_id && customers.find(c => c.id === formData.customer_id)?.factory_address)}
+                      readOnly
+                      placeholder="Auto-filled from selected route"
+                      className="bg-secondary/50 text-muted-foreground cursor-default"
                     />
-                    {formData.customer_id && pickupCoords && (
-                      <p className="text-xs text-muted-foreground">Coordinates: {pickupCoords.lat.toFixed(4)}, {pickupCoords.lng.toFixed(4)}</p>
-                    )}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="delivery_address">Delivery Address *</Label>
-                    {selectedRouteId && selectedRouteId !== "none" ? (
-                      <Input
-                        value={formData.delivery_address}
-                        className="bg-secondary/50"
-                        disabled
-                      />
-                    ) : (
-                      <AddressAutocomplete
-                        value={formData.delivery_address}
-                        onChange={(value) => setFormData(prev => ({ ...prev, delivery_address: value }))}
-                        onPlaceSelect={handleDeliveryPlaceSelect}
-                        placeholder="Start typing delivery location..."
-                        className="bg-secondary/50"
-                      />
-                    )}
-                    {deliveryCoords && (
-                      <p className="text-xs text-muted-foreground">Coordinates: {deliveryCoords.lat.toFixed(4)}, {deliveryCoords.lng.toFixed(4)}</p>
-                    )}
+                    <Label>Delivery Address</Label>
+                    <Input
+                      value={formData.delivery_address}
+                      readOnly
+                      placeholder="Auto-filled from selected route"
+                      className="bg-secondary/50 text-muted-foreground cursor-default"
+                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1651,6 +1799,19 @@ const DispatchPage = () => {
                           .eq("dispatch_id", dispatch.id)
                           .order("created_at", { ascending: false });
                         setDeliveryUpdates(updates || []);
+                        // Fetch existing inspections
+                        const { data: inspections } = await (supabase as any)
+                          .from("vehicle_inspections")
+                          .select("type, checklist, notes")
+                          .eq("dispatch_id", dispatch.id);
+                        const preInsp = inspections?.find((i: any) => i.type === "pre");
+                        const postInsp = inspections?.find((i: any) => i.type === "post");
+                        setPreInspection(preInsp?.checklist || {});
+                        setPreInspectionNotes(preInsp?.notes || "");
+                        setPreInspectionSaved(!!preInsp);
+                        setPostInspection(postInsp?.checklist || {});
+                        setPostInspectionNotes(postInsp?.notes || "");
+                        setPostInspectionSaved(!!postInsp);
                         setIsDetailDialogOpen(true);
                       }}
                     >
@@ -1687,6 +1848,7 @@ const DispatchPage = () => {
                             delivery_commenced_at: dispatch.delivery_commenced_at || "",
                           });
                           fetchDispatchDropoffs(dispatch.id).then(setEditDropoffs);
+                          setSelectedEditRouteId(dispatch.route_id || "");
                           setIsEditDialogOpen(true);
                         }}
                       >
@@ -1799,6 +1961,19 @@ const DispatchPage = () => {
                       .eq("dispatch_id", dispatch.id)
                       .order("created_at", { ascending: false });
                     setDeliveryUpdates(updates || []);
+                    // Fetch existing inspections
+                    const { data: inspections } = await (supabase as any)
+                      .from("vehicle_inspections")
+                      .select("type, checklist, notes")
+                      .eq("dispatch_id", dispatch.id);
+                    const preInsp = inspections?.find((i: any) => i.type === "pre");
+                    const postInsp = inspections?.find((i: any) => i.type === "post");
+                    setPreInspection(preInsp?.checklist || {});
+                    setPreInspectionNotes(preInsp?.notes || "");
+                    setPreInspectionSaved(!!preInsp);
+                    setPostInspection(postInsp?.checklist || {});
+                    setPostInspectionNotes(postInsp?.notes || "");
+                    setPostInspectionSaved(!!postInsp);
 
                     setIsDetailDialogOpen(true);
                   }}
@@ -2025,9 +2200,15 @@ const DispatchPage = () => {
             <>
               {selectedDispatch.is_historical && historicalData ? (
                 <Tabs defaultValue="historical" className="w-full">
-                  <TabsList className="grid w-full grid-cols-2">
+                  <TabsList className="grid w-full grid-cols-4">
                     <TabsTrigger value="historical">All Transaction Data</TabsTrigger>
                     <TabsTrigger value="dispatch">Dispatch & Map</TabsTrigger>
+                    <TabsTrigger value="pre-check" className="flex items-center gap-1">
+                      Pre-Trip {preInspectionSaved && <CheckCircle className="w-3 h-3 text-success" />}
+                    </TabsTrigger>
+                    <TabsTrigger value="post-check" className="flex items-center gap-1">
+                      Post-Trip {postInspectionSaved && <CheckCircle className="w-3 h-3 text-success" />}
+                    </TabsTrigger>
                   </TabsList>
                   <TabsContent value="historical" className="mt-4">
                     <HistoricalDataView data={historicalData} loading={loadingHistorical} />
@@ -2074,18 +2255,67 @@ const DispatchPage = () => {
                         }}
                         dropoffs={detailDropoffs.map((d, i) => ({
                           address: d.address,
-                          latitude: d.latitude || undefined,
-                          longitude: d.longitude || undefined,
+                          lat: d.latitude || undefined,
+                          lng: d.longitude || undefined,
                           type: "dropoff" as const,
                           label: `Stop ${i + 1}`,
                         }))}
-                        mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN}
                       />
                     </div>
                   </TabsContent>
+                  <TabsContent value="pre-check" className="mt-4">
+                    {["assigned", "picked_up", "in_transit", "delivered"].includes(selectedDispatch.status || "") ? (
+                      <TripChecklistPanel
+                        sections={PRE_TRIP_CHECKLIST}
+                        checklistState={preInspection}
+                        setChecklistState={setPreInspection}
+                        notes={preInspectionNotes}
+                        setNotes={setPreInspectionNotes}
+                        saved={preInspectionSaved}
+                        saving={savingInspection}
+                        onSave={() => handleSaveInspection("pre")}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-2">
+                        <Clock className="w-8 h-8 opacity-40" />
+                        <p className="text-sm">Pre-trip check becomes available once a driver is assigned.</p>
+                      </div>
+                    )}
+                  </TabsContent>
+                  <TabsContent value="post-check" className="mt-4">
+                    {selectedDispatch.status === "delivered" ? (
+                      <TripChecklistPanel
+                        sections={POST_TRIP_CHECKLIST}
+                        checklistState={postInspection}
+                        setChecklistState={setPostInspection}
+                        notes={postInspectionNotes}
+                        setNotes={setPostInspectionNotes}
+                        saved={postInspectionSaved}
+                        saving={savingInspection}
+                        onSave={() => handleSaveInspection("post")}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-2">
+                        <Clock className="w-8 h-8 opacity-40" />
+                        <p className="text-sm">Post-trip check becomes available after delivery is completed.</p>
+                      </div>
+                    )}
+                  </TabsContent>
                 </Tabs>
               ) : (
-                <div className="grid gap-6 py-4">
+                <Tabs defaultValue="dispatch" className="w-full">
+                  <TabsList className="grid w-full grid-cols-3">
+                    <TabsTrigger value="dispatch">Dispatch & Map</TabsTrigger>
+                    <TabsTrigger value="pre-check" className="flex items-center gap-1">
+                      Pre-Trip {preInspectionSaved && <CheckCircle className="w-3 h-3 text-success" />}
+                    </TabsTrigger>
+                    <TabsTrigger value="post-check" className="flex items-center gap-1">
+                      Post-Trip {postInspectionSaved && <CheckCircle className="w-3 h-3 text-success" />}
+                    </TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="dispatch" className="mt-4">
+                  <div className="grid gap-6">
                   {/* Dispatch Info */}
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
@@ -2149,12 +2379,11 @@ const DispatchPage = () => {
                     }}
                     dropoffs={detailDropoffs.map((d, i) => ({
                       address: d.address,
-                      latitude: d.latitude || undefined,
-                      longitude: d.longitude || undefined,
+                      lat: d.latitude || undefined,
+                      lng: d.longitude || undefined,
                       type: "dropoff" as const,
                       label: `Stop ${i + 1}`,
                     }))}
-                    mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN}
                   />
 
                   {/* Delivery Updates Timeline */}
@@ -2220,7 +2449,51 @@ const DispatchPage = () => {
                     }}
                     readOnly={true}
                   />
-                </div>
+                  </div>
+                  </TabsContent>
+
+                  {/* Pre-Trip Checklist Tab */}
+                  <TabsContent value="pre-check" className="mt-4">
+                    {["assigned", "picked_up", "in_transit", "delivered"].includes(selectedDispatch.status || "") ? (
+                      <TripChecklistPanel
+                        sections={PRE_TRIP_CHECKLIST}
+                        checklistState={preInspection}
+                        setChecklistState={setPreInspection}
+                        notes={preInspectionNotes}
+                        setNotes={setPreInspectionNotes}
+                        saved={preInspectionSaved}
+                        saving={savingInspection}
+                        onSave={() => handleSaveInspection("pre")}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-2">
+                        <Clock className="w-8 h-8 opacity-40" />
+                        <p className="text-sm">Pre-trip check becomes available once a driver is assigned.</p>
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  {/* Post-Trip Checklist Tab */}
+                  <TabsContent value="post-check" className="mt-4">
+                    {selectedDispatch.status === "delivered" ? (
+                      <TripChecklistPanel
+                        sections={POST_TRIP_CHECKLIST}
+                        checklistState={postInspection}
+                        setChecklistState={setPostInspection}
+                        notes={postInspectionNotes}
+                        setNotes={setPostInspectionNotes}
+                        saved={postInspectionSaved}
+                        saving={savingInspection}
+                        onSave={() => handleSaveInspection("post")}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-2">
+                        <Clock className="w-8 h-8 opacity-40" />
+                        <p className="text-sm">Post-trip check becomes available after delivery is completed.</p>
+                      </div>
+                    )}
+                  </TabsContent>
+                </Tabs>
               )}
             </>
           )}
@@ -2274,27 +2547,41 @@ const DispatchPage = () => {
                 </Select>
               </div>
             )}
+            <div className="space-y-2">
+              <Label>Route *</Label>
+              <Select value={selectedEditRouteId || ""} onValueChange={handleEditRouteChange}>
+                <SelectTrigger className="bg-secondary/50">
+                  <Route className="w-4 h-4 mr-2" />
+                  <SelectValue placeholder="Select a route..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {routes.map((route) => (
+                    <SelectItem key={route.id} value={route.id}>
+                      {route.name} ({route.origin.split(",")[0]} → {route.destination.split(",")[0]})
+                      {route.waypoints?.length ? ` • ${route.waypoints.length} stop(s)` : ""}
+                      {route.distance_km ? ` • ${route.distance_km} km` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="edit_pickup_address">Pickup Address *</Label>
+                <Label>Pickup Address</Label>
                 <Input
-                  id="edit_pickup_address"
-                  name="pickup_address"
                   value={editFormData.pickup_address}
-                  onChange={handleEditInputChange}
-                  placeholder="Pickup location"
-                  className="bg-secondary/50"
+                  readOnly
+                  placeholder="Auto-filled from selected route"
+                  className="bg-secondary/50 text-muted-foreground cursor-default"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit_delivery_address">Delivery Address *</Label>
+                <Label>Delivery Address</Label>
                 <Input
-                  id="edit_delivery_address"
-                  name="delivery_address"
                   value={editFormData.delivery_address}
-                  onChange={handleEditInputChange}
-                  placeholder="Delivery location"
-                  className="bg-secondary/50"
+                  readOnly
+                  placeholder="Auto-filled from selected route"
+                  className="bg-secondary/50 text-muted-foreground cursor-default"
                 />
               </div>
             </div>

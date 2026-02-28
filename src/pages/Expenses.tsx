@@ -418,93 +418,73 @@ const Expenses = () => {
       subtitle="Track and manage all business expenses"
     >
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="glass-card p-6"
+          className="glass-card p-4"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
-              <CircleDollarSign className="w-6 h-6 text-primary" />
-            </div>
-            <div>
-              <p className="text-2xl font-heading font-bold text-foreground">
-                {formatCurrency(totalExpenses)}
-              </p>
-              <p className="text-sm text-muted-foreground">Total Expenses</p>
-            </div>
+          <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center mb-3">
+            <CircleDollarSign className="w-5 h-5 text-primary" />
           </div>
+          <p className="text-lg font-heading font-bold text-foreground leading-tight break-all">
+            {formatCurrency(totalExpenses)}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Total Expenses</p>
         </motion.div>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="glass-card p-6"
+          className="glass-card p-4"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-destructive/20 flex items-center justify-center">
-              <Package className="w-6 h-6 text-destructive" />
-            </div>
-            <div>
-              <p className="text-2xl font-heading font-bold text-foreground">
-                {formatCurrency(cogsTotal)}
-              </p>
-              <p className="text-sm text-muted-foreground">Cost of Goods Sold</p>
-            </div>
+          <div className="w-10 h-10 rounded-xl bg-destructive/20 flex items-center justify-center mb-3">
+            <Package className="w-5 h-5 text-destructive" />
           </div>
+          <p className="text-lg font-heading font-bold text-foreground leading-tight break-all">
+            {formatCurrency(cogsTotal)}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Cost of Goods Sold</p>
         </motion.div>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="glass-card p-6"
+          className="glass-card p-4"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-warning/20 flex items-center justify-center">
-              <TrendingDown className="w-6 h-6 text-warning" />
-            </div>
-            <div>
-              <p className="text-2xl font-heading font-bold text-foreground">
-                {formatCurrency(opexTotal)}
-              </p>
-              <p className="text-sm text-muted-foreground">Operating Expenses</p>
-            </div>
+          <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center mb-3">
+            <TrendingDown className="w-5 h-5 text-warning" />
           </div>
+          <p className="text-lg font-heading font-bold text-foreground leading-tight break-all">
+            {formatCurrency(opexTotal)}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">Operating Expenses</p>
         </motion.div>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="glass-card p-6"
+          className="glass-card p-4"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-info/20 flex items-center justify-center">
-              <Calendar className="w-6 h-6 text-info" />
-            </div>
-            <div>
-              <p className="text-2xl font-heading font-bold text-foreground">
-                {formatCurrency(thisMonthExpenses)}
-              </p>
-              <p className="text-sm text-muted-foreground">This Month</p>
-            </div>
+          <div className="w-10 h-10 rounded-xl bg-info/20 flex items-center justify-center mb-3">
+            <Calendar className="w-5 h-5 text-info" />
           </div>
+          <p className="text-lg font-heading font-bold text-foreground leading-tight break-all">
+            {formatCurrency(thisMonthExpenses)}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">This Month</p>
         </motion.div>
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
-          className="glass-card p-6"
+          className="glass-card p-4"
         >
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-success/20 flex items-center justify-center">
-              <FileText className="w-6 h-6 text-success" />
-            </div>
-            <div>
-              <p className="text-2xl font-heading font-bold text-foreground">{expenses.length}</p>
-              <p className="text-sm text-muted-foreground">Total Records</p>
-            </div>
+          <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center mb-3">
+            <FileText className="w-5 h-5 text-success" />
           </div>
+          <p className="text-lg font-heading font-bold text-foreground leading-tight">{expenses.length}</p>
+          <p className="text-xs text-muted-foreground mt-1">Total Records</p>
         </motion.div>
       </div>
 

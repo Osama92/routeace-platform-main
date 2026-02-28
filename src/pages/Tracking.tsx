@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import mapboxgl from "mapbox-gl";
-import "mapbox-gl/dist/mapbox-gl.css";
+import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -50,13 +49,28 @@ const statusConfig = {
   offline: { label: "Offline", color: "bg-muted text-muted-foreground" },
 };
 
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string;
+
+let mapsApiLoaded = false;
+async function loadMapsApi(): Promise<void> {
+  if (mapsApiLoaded) return;
+  setOptions({ key: GOOGLE_MAPS_API_KEY, version: "weekly" });
+  await importLibrary("maps");
+  mapsApiLoaded = true;
+}
+function gm(): typeof google.maps {
+  return (window as any).google.maps;
+}
+
 const TrackingPage = () => {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<mapboxgl.Map | null>(null);
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const markersRef = useRef<google.maps.Marker[]>([]);
+  const mapsRef = useRef<typeof google.maps | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedVehicle, setSelectedVehicle] = useState<TrackedVehicle | null>(null);
-  const [mapboxToken] = useState<string>("");
 
   // Fetch real vehicle and dispatch data
   const { data: trackedVehicles = [], isLoading, refetch } = useQuery({
@@ -189,40 +203,86 @@ const TrackingPage = () => {
   const activeCount = trackedVehicles.filter((v) => v.status === "active").length;
   const idleCount = trackedVehicles.filter((v) => v.status === "idle").length;
 
+  // Initialize Google Map once
   useEffect(() => {
-    if (!mapContainer.current || !mapboxToken || trackedVehicles.length === 0) return;
+    if (!mapContainer.current || !GOOGLE_MAPS_API_KEY) return;
 
-    mapboxgl.accessToken = mapboxToken;
+    let cancelled = false;
+    (async () => {
+      await loadMapsApi();
+      if (cancelled || !mapContainer.current) return;
+      const maps = gm();
+      mapsRef.current = maps;
+      const gMap = new maps.Map(mapContainer.current, {
+        center: { lat: 9.082, lng: 8.6753 },
+        zoom: 5.5,
+        mapTypeId: "roadmap",
+        zoomControl: true,
+        streetViewControl: false,
+        mapTypeControl: false,
+        fullscreenControl: false,
+      });
+      mapRef.current = gMap;
+      setMapReady(true);
+    })();
 
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: "mapbox://styles/mapbox/dark-v11",
-      center: [8.6753, 9.082],
-      zoom: 5.5,
-    });
+    return () => { cancelled = true; };
+  }, []);
 
-    map.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+  // Update markers when tracked vehicles change
+  useEffect(() => {
+    if (!mapRef.current || !mapReady) return;
+    const maps = gm();
+
+    markersRef.current.forEach((m) => m.setMap(null));
+    markersRef.current = [];
+
+    const infoWindow = new maps.InfoWindow();
 
     trackedVehicles.forEach((vehicle) => {
       if (!vehicle.lat || !vehicle.lng) return;
 
-      const el = document.createElement("div");
-      el.className = `w-8 h-8 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-110 ${
-        vehicle.status === "active"
-          ? "bg-success"
-          : vehicle.status === "idle"
-          ? "bg-warning"
-          : "bg-muted"
-      }`;
-      el.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="2"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>`;
+      const color =
+        vehicle.status === "active" ? "#f97316"
+        : vehicle.status === "idle" ? "#f59e0b"
+        : "#6b7280";
 
-      el.onclick = () => setSelectedVehicle(vehicle);
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+        <circle cx="16" cy="16" r="14" fill="${color}" stroke="white" stroke-width="2.5"/>
+        <rect x="5" y="9" width="13" height="9" rx="1.5" fill="white" opacity="0.9"/>
+        <polygon points="18 11 23 11 25 14 25 18 18 18" fill="white" opacity="0.9"/>
+        <circle cx="9" cy="20" r="2" fill="${color}" stroke="white" stroke-width="1"/>
+        <circle cx="21" cy="20" r="2" fill="${color}" stroke="white" stroke-width="1"/>
+      </svg>`;
 
-      new mapboxgl.Marker(el).setLngLat([vehicle.lng, vehicle.lat]).addTo(map.current!);
+      const icon: google.maps.Icon = {
+        url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+        scaledSize: new maps.Size(32, 32),
+        anchor: new maps.Point(16, 16),
+      };
+
+      const marker = new maps.Marker({
+        map: mapRef.current!,
+        position: { lat: vehicle.lat, lng: vehicle.lng },
+        icon,
+        title: vehicle.vehicleNumber,
+      });
+
+      marker.addListener("click", () => {
+        setSelectedVehicle(vehicle);
+        infoWindow.setContent(`
+          <div style="padding:8px;min-width:150px">
+            <p style="font-weight:600;font-size:13px;margin:0 0 2px">${vehicle.vehicleNumber}</p>
+            <p style="font-size:12px;color:#555;margin:0">${vehicle.driverName}</p>
+            <p style="font-size:11px;color:#888;margin:4px 0 0">${vehicle.status === "active" ? "In Transit" : vehicle.status === "idle" ? "Idle" : "Offline"}</p>
+          </div>
+        `);
+        infoWindow.open(mapRef.current, marker);
+      });
+
+      markersRef.current.push(marker);
     });
-
-    return () => map.current?.remove();
-  }, [mapboxToken, trackedVehicles]);
+  }, [trackedVehicles, mapReady]);
 
   // Format ETA from scheduled delivery
   const formatEta = (scheduledDelivery: string | null): string => {
@@ -369,18 +429,15 @@ const TrackingPage = () => {
             </Button>
           </div>
 
-          {mapboxToken ? (
+          {GOOGLE_MAPS_API_KEY ? (
             <div ref={mapContainer} className="flex-1 rounded-lg overflow-hidden" />
           ) : (
             <div className="flex-1 bg-secondary/30 rounded-lg flex items-center justify-center">
               <div className="text-center p-8">
                 <Layers className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-                <p className="text-lg font-medium text-foreground mb-2">
-                  Map Preview
-                </p>
+                <p className="text-lg font-medium text-foreground mb-2">Map Preview</p>
                 <p className="text-sm text-muted-foreground max-w-md">
-                  Configure Mapbox token to enable live GPS tracking with real-time
-                  vehicle positions
+                  Configure Google Maps API key to enable live GPS tracking
                 </p>
               </div>
             </div>

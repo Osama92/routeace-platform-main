@@ -7,6 +7,7 @@ interface LineItem {
   quantity: number;
   price: number;
   location?: string;
+  tonnage?: string;
 }
 
 interface CompanyProfile {
@@ -209,9 +210,10 @@ const InvoiceTemplate = forwardRef<HTMLDivElement, InvoiceTemplateProps>(
             <tr style={{ backgroundColor: "#2d2d2d" }}>
               <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "left", width: "40px" }}>#</th>
               <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "left" }}>Description</th>
-              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "center", width: "70px" }}>Qty</th>
-              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "right", width: "110px" }}>Rate</th>
-              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "right", width: "120px" }}>Amount</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "center", width: "60px" }}>T</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "center", width: "60px" }}>Qty</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "right", width: "100px" }}>Rate</th>
+              <th style={{ padding: "10px 12px", color: "#ffffff", fontWeight: "600", fontSize: "12px", textAlign: "right", width: "110px" }}>Amount</th>
             </tr>
           </thead>
           <tbody>
@@ -237,6 +239,9 @@ const InvoiceTemplate = forwardRef<HTMLDivElement, InvoiceTemplateProps>(
                       {item.location}
                     </div>
                   )}
+                </td>
+                <td style={{ padding: "10px 12px", color: "#1a1a1a", fontSize: "12px", textAlign: "center", verticalAlign: "top" }}>
+                  {item.tonnage || '—'}
                 </td>
                 <td style={{ padding: "10px 12px", color: "#1a1a1a", fontSize: "12px", textAlign: "center", verticalAlign: "top" }}>
                   {item.quantity.toFixed(2)}
