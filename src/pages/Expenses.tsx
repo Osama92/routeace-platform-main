@@ -51,6 +51,7 @@ import {
   Image,
   Package,
   ExternalLink,
+  Pencil,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -84,6 +85,15 @@ interface Expense {
   submitted_by: string | null;
   zoho_expense_id: string | null;
   zoho_synced_at: string | null;
+  payment_account_id: string | null;
+  payment_account_name: string | null;
+}
+
+interface BankAccount {
+  id: string;
+  name: string;
+  account_type: string | null;
+  account_number: string | null;
 }
 
 interface Partner {
@@ -127,6 +137,11 @@ const Expenses = () => {
   const [vendors, setVendors] = useState<Partner[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [syncingBankAccounts, setSyncingBankAccounts] = useState(false);
+  const [manageBankOpen, setManageBankOpen] = useState(false);
+  const [editingAccountNumbers, setEditingAccountNumbers] = useState<Record<string, string>>({});
+  const [savingAccountNumbers, setSavingAccountNumbers] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [cogsFilter, setCogsFilter] = useState("all");
@@ -148,6 +163,7 @@ const Expenses = () => {
     vendor_id: "",
     vehicle_id: "",
     driver_id: "",
+    payment_account_id: "",
     notes: "",
     is_recurring: false,
     is_cogs: false,
@@ -162,11 +178,12 @@ const Expenses = () => {
 
   const fetchData = async () => {
     try {
-      const [expensesRes, vendorsRes, vehiclesRes, driversRes] = await Promise.all([
+      const [expensesRes, vendorsRes, vehiclesRes, driversRes, bankAccountsRes] = await Promise.all([
         supabase.from("expenses").select("*").order("expense_date", { ascending: false }),
         supabase.from("partners").select("id, company_name"),
         supabase.from("vehicles").select("id, registration_number"),
         supabase.from("drivers").select("id, full_name"),
+        (supabase as any).from("bank_accounts").select("id, name, account_type, account_number").order("name"),
       ]);
 
       if (expensesRes.error) throw expensesRes.error;
@@ -174,6 +191,7 @@ const Expenses = () => {
       setVendors(vendorsRes.data || []);
       setVehicles(vehiclesRes.data || []);
       setDrivers(driversRes.data || []);
+      setBankAccounts(bankAccountsRes.data || []);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -265,6 +283,7 @@ const Expenses = () => {
         receiptUrl = await uploadReceipt() || "";
       }
 
+      const selectedBank = bankAccounts.find(b => b.id === formData.payment_account_id);
       const insertData = {
         category: formData.category as "fuel" | "maintenance" | "driver_salary" | "insurance" | "tolls" | "parking" | "repairs" | "administrative" | "marketing" | "utilities" | "rent" | "equipment" | "other",
         description: formData.description,
@@ -272,6 +291,8 @@ const Expenses = () => {
         vendor_id: formData.vendor_id || null,
         vehicle_id: formData.vehicle_id || null,
         driver_id: formData.driver_id || null,
+        payment_account_id: formData.payment_account_id || null,
+        payment_account_name: selectedBank?.name || null,
         notes: formData.notes || null,
         is_recurring: formData.is_recurring,
         is_cogs: formData.is_cogs,
@@ -323,6 +344,7 @@ const Expenses = () => {
       vendor_id: "",
       vehicle_id: "",
       driver_id: "",
+      payment_account_id: "",
       notes: "",
       is_recurring: false,
       is_cogs: false,
@@ -331,6 +353,63 @@ const Expenses = () => {
     });
     setReceiptFile(null);
     setReceiptPreview("");
+  };
+
+  const openManageAccounts = () => {
+    const initial: Record<string, string> = {};
+    bankAccounts.forEach(a => { initial[a.id] = a.account_number || ""; });
+    setEditingAccountNumbers(initial);
+    setManageBankOpen(true);
+  };
+
+  const saveAccountNumbers = async () => {
+    setSavingAccountNumbers(true);
+    try {
+      await Promise.all(
+        bankAccounts.map(a =>
+          (supabase as any).from("bank_accounts")
+            .update({ account_number: editingAccountNumbers[a.id] || null })
+            .eq("id", a.id)
+        )
+      );
+      // Refresh local state
+      const res = await (supabase as any).from("bank_accounts").select("id, name, account_type, account_number").order("name");
+      setBankAccounts(res.data || []);
+      setManageBankOpen(false);
+      toast({ title: "Account numbers saved" });
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    } finally {
+      setSavingAccountNumbers(false);
+    }
+  };
+
+  const syncBankAccounts = async () => {
+    setSyncingBankAccounts(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('zoho-sync', {
+        body: { action: 'fetch_bank_accounts' },
+      });
+      if (error) throw error;
+      if (data.success) {
+        // Use accounts returned directly from the edge function (no extra DB round-trip needed)
+        const accounts: BankAccount[] = (data.bank_accounts || []).map((acc: any) => ({
+          id: acc.zoho_account_id, // temporary id for display; will be replaced after DB fetch
+          name: acc.name,
+          account_type: acc.account_type,
+        }));
+        // Fetch from DB to get proper UUIDs
+        const res = await (supabase as any).from("bank_accounts").select("id, name, account_type, account_number").order("name");
+        setBankAccounts(res.data?.length ? res.data : accounts);
+        toast({ title: "Bank accounts synced", description: `${data.count} accounts loaded from Zoho` });
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (error: any) {
+      toast({ title: "Sync Error", description: error.message || "Failed to sync bank accounts", variant: "destructive" });
+    } finally {
+      setSyncingBankAccounts(false);
+    }
   };
 
   const syncToZoho = async (expenseId?: string) => {
@@ -529,6 +608,19 @@ const Expenses = () => {
           <>
             <Button
               variant="outline"
+              onClick={syncBankAccounts}
+              disabled={syncingBankAccounts}
+              title="Sync bank accounts from Zoho"
+            >
+              {syncingBankAccounts ? (
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4 mr-2" />
+              )}
+              Sync Accounts
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => syncToZoho()}
               disabled={syncing}
             >
@@ -712,6 +804,58 @@ const Expenses = () => {
                     </Select>
                   </div>
 
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="payment_account_id">Paid From (Bank Account)</Label>
+                      <div className="flex items-center gap-1">
+                        {bankAccounts.length === 0 ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs"
+                            onClick={syncBankAccounts}
+                            disabled={syncingBankAccounts}
+                          >
+                            {syncingBankAccounts ? <RefreshCw className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
+                            Load from Zoho
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs"
+                            onClick={openManageAccounts}
+                          >
+                            <Pencil className="w-3 h-3 mr-1" />
+                            Edit account numbers
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    <Select
+                      value={formData.payment_account_id}
+                      onValueChange={(value) => setFormData((prev) => ({ ...prev, payment_account_id: value }))}
+                    >
+                      <SelectTrigger className="bg-secondary/50">
+                        <SelectValue placeholder={bankAccounts.length === 0 ? "No accounts — load from Zoho" : "Select bank account"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {bankAccounts.map((account) => (
+                          <SelectItem key={account.id} value={account.id}>
+                            <div className="flex flex-col">
+                              <span>{account.name}</span>
+                              {account.account_number && (
+                                <span className="text-xs text-muted-foreground">{account.account_number}</span>
+                              )}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   {/* Receipt Upload */}
                   <div className="space-y-2">
                     <Label>Receipt Image</Label>
@@ -802,6 +946,7 @@ const Expenses = () => {
               <TableHead className="text-muted-foreground">Type</TableHead>
               <TableHead className="text-muted-foreground">Approval</TableHead>
               <TableHead className="text-muted-foreground">Amount</TableHead>
+              <TableHead className="text-muted-foreground">Paid From</TableHead>
               <TableHead className="text-muted-foreground">Receipt</TableHead>
               <TableHead className="text-muted-foreground">Zoho</TableHead>
               {canManage && <TableHead className="text-muted-foreground">Actions</TableHead>}
@@ -810,7 +955,7 @@ const Expenses = () => {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={canManage ? 9 : 8} className="text-center py-8">
+                <TableCell colSpan={canManage ? 10 : 9} className="text-center py-8">
                   <div className="flex items-center justify-center gap-2">
                     <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                     Loading expenses...
@@ -819,7 +964,7 @@ const Expenses = () => {
               </TableRow>
             ) : filteredExpenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={canManage ? 9 : 8} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={canManage ? 10 : 9} className="text-center py-8 text-muted-foreground">
                   No expenses found
                 </TableCell>
               </TableRow>
@@ -878,6 +1023,11 @@ const Expenses = () => {
                       {formatCurrency(expense.amount)}
                     </TableCell>
                     <TableCell>
+                      <span className="text-sm text-muted-foreground">
+                        {expense.payment_account_name || "-"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
                       {expense.receipt_url ? (
                         <a
                           href={expense.receipt_url}
@@ -928,6 +1078,42 @@ const Expenses = () => {
           </TableBody>
         </Table>
       </motion.div>
+
+      {/* Manage Bank Account Numbers Dialog */}
+      <Dialog open={manageBankOpen} onOpenChange={setManageBankOpen}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="font-heading">Bank Account Numbers</DialogTitle>
+            <DialogDescription>
+              Enter the account numbers for your Zoho banking accounts.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2 max-h-[60vh] overflow-y-auto pr-1">
+            {bankAccounts.map((account) => (
+              <div key={account.id} className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{account.name}</p>
+                  <p className="text-xs text-muted-foreground">{account.account_type}</p>
+                </div>
+                <Input
+                  className="w-44 bg-secondary/50 text-sm"
+                  placeholder="Account number"
+                  value={editingAccountNumbers[account.id] ?? ""}
+                  onChange={(e) =>
+                    setEditingAccountNumbers((prev) => ({ ...prev, [account.id]: e.target.value }))
+                  }
+                />
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setManageBankOpen(false)}>Cancel</Button>
+            <Button onClick={saveAccountNumbers} disabled={savingAccountNumbers}>
+              {savingAccountNumbers ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };

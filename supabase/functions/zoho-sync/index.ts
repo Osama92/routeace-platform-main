@@ -239,7 +239,8 @@ async function getExpenseAccountId(
 async function syncExpenseToZoho(
   accessToken: string,
   organizationId: string,
-  expense: any
+  expense: any,
+  supabase?: any
 ): Promise<string | null> {
   console.log('Syncing expense to Zoho:', expense.description);
 
@@ -258,6 +259,19 @@ async function syncExpenseToZoho(
     description: expense.description || `${expense.category || 'Expense'} - ${expense.expense_date}`,
     reference_number: expense.id?.substring(0, 50), // Zoho has a limit on reference number length
   };
+
+  // Add paid_through_account_id if a bank account is linked
+  if (expense.payment_account_id) {
+    // Look up the Zoho account ID from our bank_accounts table
+    const { data: bankAccount } = await supabase
+      .from('bank_accounts')
+      .select('zoho_account_id')
+      .eq('id', expense.payment_account_id)
+      .maybeSingle();
+    if (bankAccount?.zoho_account_id) {
+      zohoExpenseData.paid_through_account_id = bankAccount.zoho_account_id;
+    }
+  }
 
   // Add vendor if available (for driver salary expenses)
   if (expense.driver_id) {
@@ -409,7 +423,7 @@ serve(async (req) => {
           throw new Error('Expense must be approved before syncing to Zoho');
         }
 
-        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense);
+        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense, supabase);
         await supabase
           .from('expenses')
           .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
@@ -462,7 +476,7 @@ serve(async (req) => {
         let failed = 0;
 
         for (const expense of expenses || []) {
-          const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense);
+          const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense, supabase);
 
           if (zohoExpenseId) {
             await supabase
@@ -485,6 +499,40 @@ serve(async (req) => {
         const zohoExpenses = await fetchExpensesFromZoho(accessToken, organizationId);
         result.invoices = zohoInvoices;
         result.expenses = zohoExpenses;
+        break;
+      }
+
+      case 'fetch_bank_accounts': {
+        // Fetch bank and cash accounts from Zoho chart of accounts
+        const accountsResponse = await fetch(
+          `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}`,
+          {
+            headers: {
+              'Authorization': `Zoho-oauthtoken ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        const accountsData = await accountsResponse.json();
+        const bankAccountTypes = ['bank', 'cash', 'other_current_asset'];
+        const bankAccounts = (accountsData.chartofaccounts || []).filter((acc: any) =>
+          bankAccountTypes.includes(acc.account_type?.toLowerCase())
+        );
+        // Sync into local bank_accounts table: delete all and re-insert for simplicity
+        const upsertRows = bankAccounts.map((acc: any) => ({
+          zoho_account_id: acc.account_id,
+          name: acc.account_name,
+          account_type: acc.account_type,
+          currency_code: acc.currency_code || 'NGN',
+          is_active: acc.is_inactive === true ? false : true,
+        }));
+        if (upsertRows.length > 0) {
+          // Delete existing rows then insert fresh to avoid constraint issues
+          await supabase.from('bank_accounts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('bank_accounts').insert(upsertRows);
+        }
+        result.bank_accounts = upsertRows;
+        result.count = upsertRows.length;
         break;
       }
 
