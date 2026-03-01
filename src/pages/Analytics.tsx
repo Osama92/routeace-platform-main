@@ -101,7 +101,7 @@ const AnalyticsPage = () => {
       // Fetch dispatches in date range
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, status, distance_km, scheduled_delivery, actual_delivery, pickup_address, delivery_address, created_at")
+        .select("id, status, distance_km, scheduled_delivery, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id")
         .gte("created_at", startISO)
         .lte("created_at", endISO);
 
@@ -112,17 +112,26 @@ const AnalyticsPage = () => {
         .gte("created_at", startISO)
         .lte("created_at", endISO);
 
-      // Fetch vehicles for fleet utilization
+      // Fetch vehicles for fleet utilization (current snapshot is fine — status is live)
       const { data: vehicles } = await supabase
         .from("vehicles")
-        .select("status");
+        .select("id, status");
 
-      // Fetch drivers for performance
-      const { data: drivers } = await supabase
-        .from("drivers")
-        .select("full_name, rating, total_trips, status")
-        .order("rating", { ascending: false })
-        .limit(5);
+      // Fetch dispatches with driver info for period-specific driver performance
+      const { data: driverDispatches } = await supabase
+        .from("dispatches")
+        .select("driver_id, status, scheduled_delivery, actual_delivery, drivers:driver_id(full_name, rating, status)")
+        .gte("created_at", startISO)
+        .lte("created_at", endISO)
+        .not("driver_id", "is", null);
+
+      // Fetch expenses in period for cost calculation
+      const { data: expenses } = await supabase
+        .from("expenses")
+        .select("amount, expense_date")
+        .gte("expense_date", startISO.split("T")[0])
+        .lte("expense_date", endISO.split("T")[0])
+        .eq("approval_status", "approved");
 
       // Calculate KPIs
       const deliveredDispatches = dispatches?.filter(d => d.status === "delivered") || [];
@@ -175,18 +184,24 @@ const AnalyticsPage = () => {
       }
       setDeliveryData(deliveryTrend);
 
-      // Fleet utilization from vehicles
-      const statusCounts = { available: 0, on_trip: 0, maintenance: 0, offline: 0 };
+      // Fleet utilization: combine live status snapshot with period activity
+      const statusCounts = { available: 0, in_use: 0, maintenance: 0, inactive: 0 };
       vehicles?.forEach(v => {
-        const status = v.status || "available";
-        if (status in statusCounts) statusCounts[status as keyof typeof statusCounts]++;
+        const s = v.status || "available";
+        if (s in statusCounts) statusCounts[s as keyof typeof statusCounts]++;
+        else statusCounts.available++;
       });
       const totalVehicles = vehicles?.length || 1;
+      // Count distinct vehicles that had at least one dispatch in the period
+      const activeVehicleIds = new Set(
+        dispatches?.map(d => (d as any).vehicle_id).filter(Boolean)
+      );
+      const periodActiveCount = activeVehicleIds.size;
       setFleetUtilization([
-        { name: "Active", value: Math.round((statusCounts.on_trip / totalVehicles) * 100), color: "hsl(142, 76%, 36%)" },
+        { name: "Active (period)", value: Math.round((periodActiveCount / totalVehicles) * 100), color: "hsl(142, 76%, 36%)" },
         { name: "Available", value: Math.round((statusCounts.available / totalVehicles) * 100), color: "hsl(38, 92%, 50%)" },
         { name: "Maintenance", value: Math.round((statusCounts.maintenance / totalVehicles) * 100), color: "hsl(199, 89%, 48%)" },
-        { name: "Offline", value: Math.round((statusCounts.offline / totalVehicles) * 100), color: "hsl(222, 30%, 18%)" },
+        { name: "Inactive", value: Math.round((statusCounts.inactive / totalVehicles) * 100), color: "hsl(222, 30%, 18%)" },
       ]);
 
       // Top routes by frequency
@@ -205,37 +220,134 @@ const AnalyticsPage = () => {
         .slice(0, 5);
       setTopRoutes(routeArray);
 
-      // Driver performance
-      setDriverPerformance(drivers?.map(d => ({
-        name: d.full_name,
-        rating: d.rating || 0,
-        trips: d.total_trips || 0,
-        onTime: Math.round((d.rating || 5) * 20), // Approximate
-        status: d.status || "available",
-      })) || []);
+      // Driver performance — computed from dispatches in selected period
+      const driverMap = new Map<string, { name: string; rating: number; trips: number; onTime: number; trackedOnTime: number; total: number; status: string }>();
+      (driverDispatches || []).forEach((d: any) => {
+        if (!d.driver_id) return;
+        // drivers join may come back as array or object depending on Supabase version
+        const driverInfo = Array.isArray(d.drivers) ? d.drivers[0] : d.drivers;
+        const existing = driverMap.get(d.driver_id) || {
+          name: driverInfo?.full_name || "Driver",
+          rating: driverInfo?.rating || 0,
+          trips: 0,
+          onTime: 0,
+          trackedOnTime: 0, // count of delivered trips that had scheduled_delivery set
+          total: 0,
+          status: driverInfo?.status || "available",
+        };
+        existing.total++;
+        if (d.status === "delivered") {
+          existing.trips++;
+          if (d.scheduled_delivery) {
+            existing.trackedOnTime++;
+            if (d.actual_delivery && new Date(d.actual_delivery) <= new Date(d.scheduled_delivery)) {
+              existing.onTime++;
+            }
+          }
+        }
+        driverMap.set(d.driver_id, existing);
+      });
 
-      // Revenue trend (monthly)
-      const revenueTrend: any[] = [];
-      for (let i = 5; i >= 0; i--) {
-        const monthStart = new Date();
-        monthStart.setMonth(monthStart.getMonth() - i);
-        monthStart.setDate(1);
-        const monthEnd = new Date(monthStart);
-        monthEnd.setMonth(monthEnd.getMonth() + 1);
-        monthEnd.setDate(0);
-
-        const monthInvoices = invoices?.filter(inv => {
-          const created = new Date(inv.created_at);
-          return created >= monthStart && created <= monthEnd;
-        }) || [];
-
-        const monthRevenue = monthInvoices.reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
-        
-        revenueTrend.push({
-          month: format(monthStart, "MMM"),
-          revenue: monthRevenue,
-          costs: monthRevenue * 0.65, // Estimated
+      // Also fetch drivers directly to fill in any gaps (in case join returns null)
+      const allDriverIds = Array.from(driverMap.keys());
+      let driverInfoMap = new Map<string, { full_name: string; rating: number; status: string }>();
+      if (allDriverIds.length > 0) {
+        const { data: driversData } = await supabase
+          .from("drivers")
+          .select("id, full_name, rating, status")
+          .in("id", allDriverIds);
+        (driversData || []).forEach((dr: any) => {
+          driverInfoMap.set(dr.id, { full_name: dr.full_name, rating: dr.rating || 0, status: dr.status || "available" });
         });
+      }
+
+      const driverPerfArray = Array.from(driverMap.entries())
+        .map(([driverId, d]) => {
+          const info = driverInfoMap.get(driverId);
+          // OTD: if any trips had scheduled_delivery set, use that; otherwise show N/A (-1)
+          const onTimeVal = d.trackedOnTime > 0
+            ? Math.round((d.onTime / d.trackedOnTime) * 100)
+            : -1; // -1 = N/A
+          return {
+            name: info?.full_name || d.name,
+            rating: info?.rating ?? d.rating,
+            trips: d.trips,
+            onTime: onTimeVal,
+            status: info?.status || d.status,
+          };
+        })
+        .sort((a, b) => b.trips - a.trips)
+        .slice(0, 5);
+      setDriverPerformance(driverPerfArray);
+
+      // Revenue trend — bucketed to match the selected timeRange
+      const revenueTrend: any[] = [];
+
+      if (timeRange === "24h") {
+        // Hourly buckets for last 24 hours
+        for (let i = 23; i >= 0; i--) {
+          const bucketStart = subHours(new Date(), i + 1);
+          const bucketEnd = subHours(new Date(), i);
+          const bucketInvoices = invoices?.filter(inv => {
+            const d = new Date(inv.created_at);
+            return d >= bucketStart && d < bucketEnd;
+          }) || [];
+          const bucketExpenses = expenses?.filter(e => {
+            const d = new Date(e.expense_date);
+            return d >= bucketStart && d < bucketEnd;
+          }) || [];
+          revenueTrend.push({
+            month: format(bucketEnd, "HH:mm"),
+            revenue: bucketInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0),
+            costs: bucketExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
+          });
+        }
+      } else if (timeRange === "7d") {
+        // Daily buckets for last 7 days
+        for (let i = 6; i >= 0; i--) {
+          const day = subDays(new Date(), i);
+          const dayStart = startOfDay(day);
+          const dayEnd = endOfDay(day);
+          const dayInvoices = invoices?.filter(inv => {
+            const d = new Date(inv.created_at);
+            return d >= dayStart && d <= dayEnd;
+          }) || [];
+          const dayExpenses = expenses?.filter(e => {
+            const d = new Date(e.expense_date);
+            return d >= dayStart && d <= dayEnd;
+          }) || [];
+          revenueTrend.push({
+            month: format(day, "MMM d"),
+            revenue: dayInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0),
+            costs: dayExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
+          });
+        }
+      } else {
+        // Monthly buckets for 30d / 90d
+        const monthCount = timeRange === "30d" ? 1 : 3;
+        for (let i = monthCount - 1; i >= 0; i--) {
+          const monthStart = new Date();
+          monthStart.setMonth(monthStart.getMonth() - i);
+          monthStart.setDate(1);
+          monthStart.setHours(0, 0, 0, 0);
+          const monthEnd = new Date(monthStart);
+          monthEnd.setMonth(monthEnd.getMonth() + 1);
+          monthEnd.setDate(0);
+          monthEnd.setHours(23, 59, 59, 999);
+          const monthInvoices = invoices?.filter(inv => {
+            const d = new Date(inv.created_at);
+            return d >= monthStart && d <= monthEnd;
+          }) || [];
+          const monthExpenses = expenses?.filter(e => {
+            const d = new Date(e.expense_date);
+            return d >= monthStart && d <= monthEnd;
+          }) || [];
+          revenueTrend.push({
+            month: format(monthStart, "MMM yyyy"),
+            revenue: monthInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0),
+            costs: monthExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
+          });
+        }
       }
       setRevenueData(revenueTrend);
 
@@ -311,7 +423,7 @@ const AnalyticsPage = () => {
             driver.name,
             driver.rating.toFixed(1),
             driver.trips.toString(),
-            `${driver.onTime}%`,
+            driver.onTime === -1 ? "N/A" : `${driver.onTime}%`,
           ]),
           styles: { fontSize: 9, cellPadding: 2 },
           headStyles: { fillColor: [59, 130, 246], textColor: 255 },
@@ -710,17 +822,21 @@ const AnalyticsPage = () => {
                         {driver.trips}
                       </td>
                       <td className="py-3 px-4">
-                        <Badge
-                          className={
-                            driver.onTime >= 95
-                              ? "bg-success/15 text-success"
-                              : driver.onTime >= 90
-                              ? "bg-warning/15 text-warning"
-                              : "bg-destructive/15 text-destructive"
-                          }
-                        >
-                          {driver.onTime}%
-                        </Badge>
+                        {driver.onTime === -1 ? (
+                          <span className="text-muted-foreground text-sm">N/A</span>
+                        ) : (
+                          <Badge
+                            className={
+                              driver.onTime >= 95
+                                ? "bg-success/15 text-success"
+                                : driver.onTime >= 90
+                                ? "bg-warning/15 text-warning"
+                                : "bg-destructive/15 text-destructive"
+                            }
+                          >
+                            {driver.onTime}%
+                          </Badge>
+                        )}
                       </td>
                       <td className="py-3 px-4">
                         <Badge className={driver.status === "available" ? "bg-success/15 text-success" : "bg-warning/15 text-warning"}>

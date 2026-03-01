@@ -76,6 +76,7 @@ interface LineItem {
   tonnage?: string;
   vatType?: "none" | "inclusive" | "exclusive";
   serviceCharge?: number;
+  serviceChargeVat?: "none" | "inclusive" | "exclusive";
 }
 
 interface Invoice {
@@ -239,7 +240,7 @@ const InvoicesPage = () => {
 
   // Line items state for the new invoice creation
   const [lineItems, setLineItems] = useState<LineItem[]>([
-    { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }
+    { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }
   ]);
 
   // Generate unique ID for line items
@@ -255,7 +256,7 @@ const InvoicesPage = () => {
     };
     setLineItems(prev => [
       ...prev,
-      { id: generateItemId(), type, description: descriptions[type], quantity: 1, price: 0, location: "", tonnage: "", vatType: "none", serviceCharge: 0 }
+      { id: generateItemId(), type, description: descriptions[type], quantity: 1, price: 0, location: "", tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }
     ]);
   };
 
@@ -285,22 +286,31 @@ const InvoicesPage = () => {
       lineSubtotal += lineAmount;
       totalServiceCharge += sc;
 
-      const taxBase = lineAmount + sc;
+      // Line price VAT (applied to line amount only)
       if (item.vatType === "exclusive") {
-        vatAmount += taxBase * 0.075;
+        vatAmount += lineAmount * 0.075;
       } else if (item.vatType === "inclusive") {
-        vatAmount += taxBase - taxBase / 1.075;
+        vatAmount += lineAmount - lineAmount / 1.075;
+      }
+
+      // Service charge VAT (independent)
+      if (sc > 0) {
+        if (item.serviceChargeVat === "exclusive") {
+          vatAmount += sc * 0.075;
+        } else if (item.serviceChargeVat === "inclusive") {
+          vatAmount += sc - sc / 1.075;
+        }
       }
     });
 
-    // For inclusive VAT items, the "pre-VAT" line total is already in lineSubtotal
-    // total = lines + service charges + exclusive VAT (inclusive VAT already embedded in prices)
+    // Exclusive VAT adds to the total; inclusive VAT is already embedded
     const exclusiveVat = lineItems.reduce((sum, item) => {
-      if (item.vatType === "exclusive") {
-        const taxBase = (item.quantity * item.price) + (item.serviceCharge || 0);
-        return sum + taxBase * 0.075;
-      }
-      return sum;
+      const lineAmount = item.quantity * item.price;
+      const sc = item.serviceCharge || 0;
+      let ev = 0;
+      if (item.vatType === "exclusive") ev += lineAmount * 0.075;
+      if (sc > 0 && item.serviceChargeVat === "exclusive") ev += sc * 0.075;
+      return sum + ev;
     }, 0);
 
     const total = lineSubtotal + totalServiceCharge + exclusiveVat;
@@ -482,6 +492,7 @@ const InvoicesPage = () => {
         if (item.tonnage) s += `|t:${item.tonnage}`;
         if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
         if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
+        if (item.serviceCharge && item.serviceCharge > 0 && item.serviceChargeVat && item.serviceChargeVat !== "none") s += `|scv:${item.serviceChargeVat}`;
         return s;
       }).join('; ');
 
@@ -550,7 +561,7 @@ const InvoicesPage = () => {
       invoice_number: generateInvoiceNumber(),
     });
     setLineItems([
-      { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }
+      { id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }
     ]);
   };
 
@@ -588,7 +599,7 @@ const InvoicesPage = () => {
 
   // Parse line items stored in notes back into the form's LineItem array
   const parseLineItemsFromNotes = (notes: string | null): LineItem[] => {
-    if (!notes) return [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }];
+    if (!notes) return [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }];
     const itemsSection = notes.split('\n\nNotes:')[0];
     const items = itemsSection.split('; ').map((raw) => {
       // Each item may have trailing pipe-separated metadata: |t:tonnage|v:vatType|sc:serviceCharge
@@ -607,11 +618,12 @@ const InvoicesPage = () => {
         tonnage: meta["t"] || "",
         vatType: (meta["v"] as LineItem["vatType"]) || "none",
         serviceCharge: meta["sc"] ? parseFloat(meta["sc"]) : 0,
+        serviceChargeVat: (meta["scv"] as LineItem["serviceChargeVat"]) || "none",
       };
     }).filter(Boolean) as LineItem[];
     return items.length > 0
       ? items
-      : [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0 }];
+      : [{ id: "1", type: "delivery", description: "Delivery Service", quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }];
   };
 
   // Parse user-facing notes (the part after \n\nNotes:)
@@ -657,6 +669,7 @@ const InvoicesPage = () => {
         if (item.tonnage) s += `|t:${item.tonnage}`;
         if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
         if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
+        if (item.serviceCharge && item.serviceCharge > 0 && item.serviceChargeVat && item.serviceChargeVat !== "none") s += `|scv:${item.serviceChargeVat}`;
         return s;
       }).join('; ');
 
@@ -812,6 +825,7 @@ const InvoicesPage = () => {
             tonnage: meta['t'] || '',
             vatType: meta['v'] || 'none',
             serviceCharge: meta['sc'] ? parseFloat(meta['sc']) : 0,
+            serviceChargeVat: meta['scv'] || 'none',
           };
         }).filter(Boolean);
         return items;
@@ -828,9 +842,12 @@ const InvoicesPage = () => {
         const sc = item.serviceCharge || 0;
         pdfLineSubtotal += lineAmt;
         pdfTotalServiceCharge += sc;
-        const taxBase = lineAmt + sc;
-        if (item.vatType === 'exclusive') pdfVatAmount += taxBase * 0.075;
-        else if (item.vatType === 'inclusive') pdfVatAmount += taxBase - taxBase / 1.075;
+        if (item.vatType === 'exclusive') pdfVatAmount += lineAmt * 0.075;
+        else if (item.vatType === 'inclusive') pdfVatAmount += lineAmt - lineAmt / 1.075;
+        if (sc > 0) {
+          if (item.serviceChargeVat === 'exclusive') pdfVatAmount += sc * 0.075;
+          else if (item.serviceChargeVat === 'inclusive') pdfVatAmount += sc - sc / 1.075;
+        }
       });
       // For old invoices with no line item metadata, fall back to stored amounts
       if (lineItemsFromNotes.length === 0 || pdfLineSubtotal === 0) {
@@ -1496,6 +1513,23 @@ const InvoicesPage = () => {
                                       className="bg-secondary/50 h-9 text-xs"
                                     />
                                   </div>
+                                  {(item.serviceCharge ?? 0) > 0 && (
+                                    <div className="flex-1">
+                                      <Select
+                                        value={item.serviceChargeVat ?? "none"}
+                                        onValueChange={(v) => updateLineItem(item.id, "serviceChargeVat", v as LineItem["serviceChargeVat"])}
+                                      >
+                                        <SelectTrigger className="bg-secondary/50 h-9 text-xs">
+                                          <SelectValue placeholder="SC VAT" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="none">SC: No VAT</SelectItem>
+                                          <SelectItem value="inclusive">SC: VAT Incl. (7.5%)</SelectItem>
+                                          <SelectItem value="exclusive">SC: VAT Excl. (+7.5%)</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -1965,6 +1999,18 @@ const InvoicesPage = () => {
                           <div className="flex-1">
                             <Input type="number" min="0" step="any" value={item.serviceCharge === 0 ? "" : (item.serviceCharge ?? "")} onChange={(e) => updateLineItem(item.id, "serviceCharge", parseFloat(e.target.value) || 0)} placeholder="Service charge (₦)" className="bg-secondary/50 h-9 text-xs" />
                           </div>
+                          {(item.serviceCharge ?? 0) > 0 && (
+                            <div className="flex-1">
+                              <Select value={item.serviceChargeVat ?? "none"} onValueChange={(v) => updateLineItem(item.id, "serviceChargeVat", v as LineItem["serviceChargeVat"])}>
+                                <SelectTrigger className="bg-secondary/50 h-9 text-xs"><SelectValue placeholder="SC VAT" /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">SC: No VAT</SelectItem>
+                                  <SelectItem value="inclusive">SC: VAT Incl. (7.5%)</SelectItem>
+                                  <SelectItem value="exclusive">SC: VAT Excl. (+7.5%)</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
