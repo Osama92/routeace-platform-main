@@ -233,6 +233,7 @@ const InvoicesPage = () => {
     customer_id: "",
     dispatch_id: "",
     amount: "",
+    invoice_date: new Date().toISOString().split("T")[0],
     due_date: "",
     notes: "",
     invoice_number: "",
@@ -505,6 +506,7 @@ const InvoicesPage = () => {
         tax_amount: invoiceTotals.vatAmount,
         total_amount: invoiceTotals.total,
         tax_type: "none",
+        invoice_date: formData.invoice_date || new Date().toISOString().split("T")[0],
         due_date: formData.due_date || null,
         notes: lineItemsNote + (formData.notes ? `\n\nNotes: ${formData.notes}` : ''),
         status: requiresApproval ? "draft" : "pending",
@@ -556,6 +558,7 @@ const InvoicesPage = () => {
       customer_id: "",
       dispatch_id: "",
       amount: "",
+      invoice_date: new Date().toISOString().split("T")[0],
       due_date: "",
       notes: "",
       invoice_number: generateInvoiceNumber(),
@@ -642,6 +645,7 @@ const InvoicesPage = () => {
       customer_id: invoice.customer_id,
       dispatch_id: invoice.dispatch_id || "",
       amount: String(invoice.amount),
+      invoice_date: (invoice as any).invoice_date ? (invoice as any).invoice_date.split('T')[0] : invoice.created_at.split('T')[0],
       due_date: invoice.due_date ? invoice.due_date.split('T')[0] : "",
       notes: parsedNotes,
       invoice_number: invoice.invoice_number,
@@ -681,6 +685,7 @@ const InvoicesPage = () => {
         tax_amount: invoiceTotals.vatAmount,
         total_amount: invoiceTotals.total,
         tax_type: "none",
+        invoice_date: formData.invoice_date || null,
         due_date: formData.due_date || null,
         notes: lineItemsNote + (formData.notes ? `\n\nNotes: ${formData.notes}` : ''),
       };
@@ -741,6 +746,55 @@ const InvoicesPage = () => {
         description: "Failed to update status",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleApproveInvoice = async (invoiceId: string, action: "approve" | "reject") => {
+    if (!user?.id) return;
+    try {
+      const inv = invoices.find(i => i.id === invoiceId);
+      if (!inv) return;
+
+      let updateData: any = {};
+
+      if (action === "reject") {
+        updateData = { approval_status: "rejected" };
+      } else if (inv.approval_status === "pending_first_approval") {
+        updateData = {
+          approval_status: "pending_second_approval",
+          first_approver_id: user.id,
+          first_approved_at: new Date().toISOString(),
+        };
+      } else if (inv.approval_status === "pending_second_approval") {
+        updateData = {
+          approval_status: "approved",
+          second_approver_id: user.id,
+          second_approved_at: new Date().toISOString(),
+          status: "pending", // move from draft to pending (ready to send)
+        };
+      } else {
+        return;
+      }
+
+      const { error } = await supabase
+        .from("invoices")
+        .update(updateData)
+        .eq("id", invoiceId);
+
+      if (error) throw error;
+
+      toast({
+        title: action === "approve" ? "Invoice Approved" : "Invoice Rejected",
+        description: action === "approve"
+          ? inv.approval_status === "pending_first_approval"
+            ? "First approval granted. Awaiting final approval."
+            : "Invoice fully approved and is now active."
+          : "Invoice has been rejected.",
+      });
+      fetchInvoices();
+      setSelectedInvoice(null);
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to update approval", variant: "destructive" });
     }
   };
 
@@ -1535,6 +1589,42 @@ const InvoicesPage = () => {
                             ))}
                           </div>
                         </div>
+
+                        {/* Invoice Date & Due Date */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-2">
+                            <Label htmlFor="invoice_date">Invoice Date *</Label>
+                            <Input
+                              id="invoice_date"
+                              type="date"
+                              value={formData.invoice_date}
+                              onChange={(e) => setFormData(prev => ({ ...prev, invoice_date: e.target.value }))}
+                              className="bg-secondary/50"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="due_date">Due Date</Label>
+                            <Input
+                              id="due_date"
+                              type="date"
+                              value={formData.due_date}
+                              onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
+                              className="bg-secondary/50"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Notes */}
+                        <div className="space-y-2">
+                          <Label htmlFor="notes">Notes (Optional)</Label>
+                          <Input
+                            id="notes"
+                            value={formData.notes}
+                            onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                            placeholder="Additional notes..."
+                            className="bg-secondary/50"
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -1577,7 +1667,7 @@ const InvoicesPage = () => {
                           <div className="flex justify-between mb-4">
                             <p className="font-semibold text-gray-900">{selectedCustomer?.company_name || "Select customer"}</p>
                             <div className="text-right text-[10px]">
-                              <div className="flex justify-end gap-2"><span className="text-gray-500">Invoice Date :</span><span className="text-gray-900">{new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
+                              <div className="flex justify-end gap-2"><span className="text-gray-500">Invoice Date :</span><span className="text-gray-900">{formData.invoice_date ? new Date(formData.invoice_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
                               <div className="flex justify-end gap-2"><span className="text-gray-500">Due Date :</span><span className="text-gray-900">{formData.due_date ? new Date(formData.due_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
                             </div>
                           </div>
@@ -2017,16 +2107,28 @@ const InvoicesPage = () => {
                   </div>
                 </div>
 
-                {/* Due Date */}
-                <div className="space-y-2 pt-2">
-                  <Label htmlFor="edit_due_date">Due Date</Label>
-                  <Input
-                    id="edit_due_date"
-                    type="date"
-                    value={formData.due_date}
-                    onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
-                    className="bg-secondary/50"
-                  />
+                {/* Invoice Date & Due Date */}
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_invoice_date">Invoice Date *</Label>
+                    <Input
+                      id="edit_invoice_date"
+                      type="date"
+                      value={formData.invoice_date}
+                      onChange={(e) => setFormData(prev => ({ ...prev, invoice_date: e.target.value }))}
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit_due_date">Due Date</Label>
+                    <Input
+                      id="edit_due_date"
+                      type="date"
+                      value={formData.due_date}
+                      onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
+                      className="bg-secondary/50"
+                    />
+                  </div>
                 </div>
 
                 {/* Notes */}
@@ -2079,7 +2181,7 @@ const InvoicesPage = () => {
                   <div className="flex justify-between mb-4">
                     <p className="font-semibold text-gray-900">{customers.find(c => c.id === formData.customer_id)?.company_name || "Select customer"}</p>
                     <div className="text-right text-[10px]">
-                      <div className="flex justify-end gap-2"><span className="text-gray-500">Invoice Date :</span><span className="text-gray-900">{editingInvoice ? new Date(editingInvoice.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+                      <div className="flex justify-end gap-2"><span className="text-gray-500">Invoice Date :</span><span className="text-gray-900">{formData.invoice_date ? new Date(formData.invoice_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
                       <div className="flex justify-end gap-2"><span className="text-gray-500">Due Date :</span><span className="text-gray-900">{formData.due_date ? new Date(formData.due_date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
                     </div>
                   </div>
@@ -2179,10 +2281,10 @@ const InvoicesPage = () => {
         open={!!selectedInvoice}
         onOpenChange={() => setSelectedInvoice(null)}
       >
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] flex flex-col p-0 gap-0">
           {selectedInvoice && (
             <>
-              <DialogHeader>
+              <DialogHeader className="px-6 pt-6 pb-2 flex-shrink-0">
                 <DialogTitle className="font-heading">
                   {selectedInvoice.invoice_number}
                 </DialogTitle>
@@ -2190,7 +2292,8 @@ const InvoicesPage = () => {
                   Invoice details and breakdown
                 </DialogDescription>
               </DialogHeader>
-              <div className="space-y-4 py-4">
+              <div className="flex-1 overflow-y-auto px-6 py-2">
+              <div className="space-y-4 py-2">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">Client</p>
@@ -2227,11 +2330,34 @@ const InvoicesPage = () => {
                     </div>
                   </div>
                   {selectedInvoice.approval_status && (
-                    <div>
-                      <p className="text-sm text-muted-foreground">Approval Status</p>
-                      <span className={`status-badge ${approvalStatusConfig[selectedInvoice.approval_status]?.className || 'bg-muted text-muted-foreground'}`}>
-                        {approvalStatusConfig[selectedInvoice.approval_status]?.label || selectedInvoice.approval_status}
-                      </span>
+                    <div className="col-span-2">
+                      <p className="text-sm text-muted-foreground mb-1">Approval Status</p>
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className={`status-badge ${approvalStatusConfig[selectedInvoice.approval_status]?.className || 'bg-muted text-muted-foreground'}`}>
+                          {approvalStatusConfig[selectedInvoice.approval_status]?.label || selectedInvoice.approval_status}
+                        </span>
+                        {canManage && (selectedInvoice.approval_status === "pending_first_approval" || selectedInvoice.approval_status === "pending_second_approval") && (
+                          <>
+                            <Button
+                              size="sm"
+                              className="bg-success/15 text-success hover:bg-success/25 border-0"
+                              onClick={() => handleApproveInvoice(selectedInvoice.id, "approve")}
+                            >
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              {selectedInvoice.approval_status === "pending_first_approval" ? "First Approve" : "Final Approve"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                              onClick={() => handleApproveInvoice(selectedInvoice.id, "reject")}
+                            >
+                              <XCircle className="w-3 h-3 mr-1" />
+                              Reject
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                   {selectedInvoice.first_approver && (
@@ -2317,14 +2443,15 @@ const InvoicesPage = () => {
                   </div>
                 )}
 
-                {selectedInvoice.notes && (
+                {parseUserNotes(selectedInvoice.notes) && (
                   <div className="border-t border-border/50 pt-4">
                     <p className="text-sm text-muted-foreground">Notes</p>
-                    <p className="text-foreground">{selectedInvoice.notes}</p>
+                    <p className="text-foreground">{parseUserNotes(selectedInvoice.notes)}</p>
                   </div>
                 )}
               </div>
-              <DialogFooter>
+              </div>
+              <DialogFooter className="px-6 py-4 border-t border-border/50 flex-shrink-0">
                 <Button variant="outline" onClick={() => setSelectedInvoice(null)}>
                   Close
                 </Button>

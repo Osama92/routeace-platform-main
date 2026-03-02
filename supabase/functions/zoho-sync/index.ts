@@ -53,6 +53,41 @@ async function getZohoAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+// Parse line items from the notes string stored in the DB
+// Format: "Description (location): qty x ₦price|t:tonnage|v:vatType|sc:serviceCharge|scv:serviceChargeVat; ..."
+function parseLineItemsFromNotes(notes: string | null): Array<{
+  description: string;
+  location: string;
+  quantity: number;
+  price: number;
+  tonnage: string;
+  vatType: string;
+  serviceCharge: number;
+  serviceChargeVat: string;
+}> {
+  if (!notes) return [];
+  const itemsSection = notes.split('\n\nNotes:')[0];
+  const rawItems = itemsSection.split('; ').map(raw => raw.trim()).filter(Boolean);
+  const parsed = rawItems.map(raw => {
+    const [itemPart, ...metaParts] = raw.split('|');
+    const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
+    if (!match) return null;
+    const meta: Record<string, string> = {};
+    metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v !== undefined) meta[k.trim()] = v.trim(); });
+    return {
+      description: match[1].trim(),
+      location: match[2] || '',
+      quantity: parseFloat(match[3]) || 1,
+      price: parseFloat(match[4].replace(/,/g, '')) || 0,
+      tonnage: meta['t'] || '',
+      vatType: meta['v'] || 'none',
+      serviceCharge: meta['sc'] ? parseFloat(meta['sc']) : 0,
+      serviceChargeVat: meta['scv'] || 'none',
+    };
+  }).filter(Boolean) as any[];
+  return parsed;
+}
+
 async function syncInvoiceToZoho(
   accessToken: string,
   organizationId: string,
@@ -95,28 +130,60 @@ async function syncInvoiceToZoho(
     );
     const createCustomerData = await createCustomerResponse.json();
     zohoCustomerId = createCustomerData.contact?.contact_id;
-    
+
     if (!zohoCustomerId) {
       console.error('Failed to create customer in Zoho:', createCustomerData);
       return null;
     }
   }
 
+  // Parse individual line items from the notes field
+  const parsedItems = parseLineItemsFromNotes(invoice.notes);
+
+  // Build Zoho line_items array — one entry per line item
+  let zohoLineItems: any[];
+  if (parsedItems.length > 0) {
+    zohoLineItems = parsedItems.flatMap(item => {
+      const lines: any[] = [];
+      // Main line item (price per quantity)
+      const itemName = item.location
+        ? `${item.description} (${item.location})`
+        : item.description;
+      const mainDescription = item.tonnage ? `Tonnage: ${item.tonnage}T` : undefined;
+      lines.push({
+        name: itemName,
+        description: mainDescription,
+        quantity: item.quantity,
+        rate: item.price,
+      });
+      // Service charge as a separate line if present
+      if (item.serviceCharge > 0) {
+        lines.push({
+          name: `${itemName} - Service Charge`,
+          quantity: 1,
+          rate: item.serviceCharge,
+        });
+      }
+      return lines;
+    });
+  } else {
+    // Fallback: single line with the total amount
+    zohoLineItems = [{ name: 'Delivery Service', quantity: 1, rate: invoice.amount }];
+  }
+
+  // Extract user-facing notes (part after \n\nNotes:)
+  const userNotes = invoice.notes?.includes('\n\nNotes:')
+    ? invoice.notes.split('\n\nNotes:')[1].trim()
+    : '';
+
   // Create invoice in Zoho
-  const zohoInvoiceData = {
+  const zohoInvoiceData: any = {
     customer_id: zohoCustomerId,
     invoice_number: invoice.invoice_number,
     date: invoice.created_at.split('T')[0],
     due_date: invoice.due_date || undefined,
-    line_items: [
-      {
-        name: 'Delivery Service',
-        quantity: 1,
-        rate: invoice.amount,
-        tax_id: invoice.tax_amount > 0 ? undefined : undefined,
-      },
-    ],
-    notes: invoice.notes || '',
+    line_items: zohoLineItems,
+    notes: userNotes || undefined,
     status: invoice.status === 'paid' ? 'paid' : 'draft',
   };
 

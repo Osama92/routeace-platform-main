@@ -44,6 +44,7 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCheck,
+  Trash2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -84,11 +85,6 @@ interface Invoice {
     full_name: string;
     email: string;
   };
-}
-
-interface ApprovalRole {
-  user_id: string;
-  approval_level: "first_level" | "second_level";
 }
 
 const formatCurrency = (amount: number) => {
@@ -137,10 +133,21 @@ const approvalStatusConfig: Record<string, { label: string; className: string; i
   },
 };
 
+// Normalize DB approval_status to a canonical value used throughout the page
+const normalizeApprovalStatus = (status: string | null): string => {
+  if (!status) return "pending_first_approval";
+  const s = status.toLowerCase().trim();
+  if (s === "pending" || s === "pending_1st_approval" || s === "pending_first_approval" || s === "pending_1" || s === "first_approval") return "pending_first_approval";
+  if (s === "pending_2nd_approval" || s === "pending_second_approval" || s === "pending_2" || s === "second_approval") return "pending_second_approval";
+  if (s === "approved" || s === "fully_approved") return "approved";
+  if (s === "rejected") return "rejected";
+  return "pending_first_approval"; // default unknown statuses to pending first
+};
+
 // Helper to get normalized status config
 const getStatusConfig = (status: string | null) => {
-  if (!status) return approvalStatusConfig.pending_first_approval;
-  return approvalStatusConfig[status] || approvalStatusConfig.pending_first_approval;
+  const normalized = normalizeApprovalStatus(status);
+  return approvalStatusConfig[normalized] || approvalStatusConfig.pending_first_approval;
 };
 
 const InvoiceApprovalsPage = () => {
@@ -153,14 +160,9 @@ const InvoiceApprovalsPage = () => {
   const [rejectionReason, setRejectionReason] = useState("");
   const [processing, setProcessing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [userApprovalRoles, setUserApprovalRoles] = useState<ApprovalRole[]>([]);
   const { toast } = useToast();
-  const { user, hasRole } = useAuth();
+  const { user } = useAuth();
   const { logChange } = useAuditLog();
-
-  // Check if current user can perform approvals at each level
-  const canFirstApprove = userApprovalRoles.some(r => r.approval_level === "first_level") || hasRole("admin");
-  const canSecondApprove = userApprovalRoles.some(r => r.approval_level === "second_level") || hasRole("admin");
 
   const fetchInvoices = async () => {
     try {
@@ -211,6 +213,8 @@ const InvoiceApprovalsPage = () => {
             if (secondApprover) result.second_approver = secondApprover;
           }
 
+          // Normalize approval_status to canonical value
+          result.approval_status = normalizeApprovalStatus(result.approval_status);
           return result;
         })
       );
@@ -227,25 +231,8 @@ const InvoiceApprovalsPage = () => {
     }
   };
 
-  const fetchUserApprovalRoles = async () => {
-    if (!user?.id) return;
-
-    try {
-      const { data, error } = await supabase
-        .from("approval_roles")
-        .select("user_id, approval_level")
-        .eq("user_id", user.id);
-
-      if (error) throw error;
-      setUserApprovalRoles(data || []);
-    } catch (error) {
-      console.error("Failed to fetch approval roles:", error);
-    }
-  };
-
   useEffect(() => {
     fetchInvoices();
-    fetchUserApprovalRoles();
   }, [user?.id]);
 
   const sendApprovalNotification = async (invoiceId: string, action: "first_approval" | "second_approval" | "rejected", rejectionReason?: string) => {
@@ -401,16 +388,24 @@ const InvoiceApprovalsPage = () => {
     }
   };
 
-  // Calculate stats - handle both exact match and partial matches for approval_status
-  const pendingFirst = invoices.filter(inv =>
-    inv.approval_status === "pending_first_approval" ||
-    inv.approval_status === "pending" ||
-    inv.approval_status === "pending_1st_approval"
-  );
-  const pendingSecond = invoices.filter(inv =>
-    inv.approval_status === "pending_second_approval" ||
-    inv.approval_status === "pending_2nd_approval"
-  );
+  const handleDeleteInvoice = async (invoice: Invoice) => {
+    if (!confirm(`Delete invoice ${invoice.invoice_number}? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase
+        .from("invoices")
+        .delete()
+        .eq("id", invoice.id);
+      if (error) throw error;
+      toast({ title: "Invoice Deleted", description: `${invoice.invoice_number} has been deleted.` });
+      fetchInvoices();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to delete invoice", variant: "destructive" });
+    }
+  };
+
+  // Statuses are normalized at fetch time — use canonical values only
+  const pendingFirst = invoices.filter(inv => inv.approval_status === "pending_first_approval");
+  const pendingSecond = invoices.filter(inv => inv.approval_status === "pending_second_approval");
   const approved = invoices.filter(inv => inv.approval_status === "approved");
   const rejected = invoices.filter(inv => inv.approval_status === "rejected");
 
@@ -424,29 +419,18 @@ const InvoiceApprovalsPage = () => {
     }
 
     if (statusFilter === "pending") {
-      // Match all pending states
       return matchesSearch && (
         invoice.approval_status === "pending_first_approval" ||
-        invoice.approval_status === "pending_second_approval" ||
-        invoice.approval_status === "pending" ||
-        invoice.approval_status === "pending_1st_approval" ||
-        invoice.approval_status === "pending_2nd_approval"
+        invoice.approval_status === "pending_second_approval"
       );
     }
 
     if (statusFilter === "pending_first_approval") {
-      return matchesSearch && (
-        invoice.approval_status === "pending_first_approval" ||
-        invoice.approval_status === "pending" ||
-        invoice.approval_status === "pending_1st_approval"
-      );
+      return matchesSearch && invoice.approval_status === "pending_first_approval";
     }
 
     if (statusFilter === "pending_second_approval") {
-      return matchesSearch && (
-        invoice.approval_status === "pending_second_approval" ||
-        invoice.approval_status === "pending_2nd_approval"
-      );
+      return matchesSearch && invoice.approval_status === "pending_second_approval";
     }
 
     return matchesSearch && invoice.approval_status === statusFilter;
@@ -563,17 +547,32 @@ const InvoiceApprovalsPage = () => {
                       {format(new Date(invoice.created_at), "dd MMM yyyy")}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedInvoice(invoice);
-                          setIsDetailDialogOpen(true);
-                        }}
-                      >
-                        <Eye className="w-4 h-4 mr-1" />
-                        Review
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedInvoice({
+                              ...invoice,
+                              approval_status: normalizeApprovalStatus(invoice.approval_status),
+                            });
+                            setIsDetailDialogOpen(true);
+                          }}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          Review
+                        </Button>
+                        {invoice.approval_status !== "approved" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDeleteInvoice(invoice)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -585,8 +584,8 @@ const InvoiceApprovalsPage = () => {
 
       {/* Detail Dialog */}
       <Dialog open={isDetailDialogOpen} onOpenChange={setIsDetailDialogOpen}>
-        <DialogContent className="sm:max-w-[600px]">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[600px] max-h-[90vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-2 flex-shrink-0">
             <DialogTitle className="font-heading">
               Invoice Review - {selectedInvoice?.invoice_number}
             </DialogTitle>
@@ -596,7 +595,9 @@ const InvoiceApprovalsPage = () => {
           </DialogHeader>
 
           {selectedInvoice && (
-            <div className="space-y-6 py-4">
+            <>
+            <div className="flex-1 overflow-y-auto px-6 py-2">
+            <div className="space-y-6 py-2">
               {/* Invoice Info */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
@@ -631,12 +632,17 @@ const InvoiceApprovalsPage = () => {
                 </div>
               </div>
 
-              {selectedInvoice.notes && (
-                <div className="p-3 bg-muted/30 rounded-lg">
-                  <p className="text-xs text-muted-foreground mb-1">Notes</p>
-                  <p className="text-sm">{selectedInvoice.notes}</p>
-                </div>
-              )}
+              {(() => {
+                const userNotes = selectedInvoice.notes?.includes('\n\nNotes:')
+                  ? selectedInvoice.notes.split('\n\nNotes:')[1].trim()
+                  : selectedInvoice.notes?.match(/^[^:]+:\s*\d+\s*x\s*/) ? '' : selectedInvoice.notes;
+                return userNotes ? (
+                  <div className="p-3 bg-muted/30 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-1">Notes</p>
+                    <p className="text-sm">{userNotes}</p>
+                  </div>
+                ) : null;
+              })()}
 
               {/* Submitter Info */}
               {selectedInvoice.submitter && (
@@ -712,66 +718,62 @@ const InvoiceApprovalsPage = () => {
                 </div>
               )}
             </div>
-          )}
+            </div>
 
-          <DialogFooter className="gap-2 flex-wrap">
-            {(selectedInvoice?.approval_status === "pending_first_approval" ||
-              selectedInvoice?.approval_status === "pending" ||
-              selectedInvoice?.approval_status === "pending_1st_approval") && (
-              <>
-                {!canFirstApprove && (
-                  <p className="text-xs text-muted-foreground w-full text-center mb-2">
-                    You are not authorized to give first level approval
-                  </p>
-                )}
-                <Button
-                  variant="destructive"
-                  onClick={() => setIsRejectDialogOpen(true)}
-                  disabled={processing || !canFirstApprove}
-                >
-                  <XCircle className="w-4 h-4 mr-2" />
-                  Reject
+          <DialogFooter className="gap-2 flex-wrap px-6 py-4 border-t border-border/50 flex-shrink-0">
+            {(() => {
+              const status = normalizeApprovalStatus(selectedInvoice.approval_status);
+              if (status === "pending_first_approval") {
+                return (
+                  <>
+                    <Button
+                      variant="destructive"
+                      onClick={() => setIsRejectDialogOpen(true)}
+                      disabled={processing}
+                    >
+                      <XCircle className="w-4 h-4 mr-2" />
+                      Reject
+                    </Button>
+                    <Button
+                      onClick={() => handleFirstApproval(selectedInvoice)}
+                      disabled={processing}
+                    >
+                      <CheckCircle className="w-4 h-4 mr-2" />
+                      {processing ? "Processing..." : "Approve (1st Level)"}
+                    </Button>
+                  </>
+                );
+              }
+              if (status === "pending_second_approval") {
+                return (
+                  <>
+                    <Button
+                      variant="destructive"
+                      onClick={() => setIsRejectDialogOpen(true)}
+                      disabled={processing}
+                    >
+                      <XCircle className="w-4 h-4 mr-2" />
+                      Reject
+                    </Button>
+                    <Button
+                      onClick={() => handleSecondApproval(selectedInvoice)}
+                      disabled={processing}
+                    >
+                      <CheckCheck className="w-4 h-4 mr-2" />
+                      {processing ? "Processing..." : "Final Approval"}
+                    </Button>
+                  </>
+                );
+              }
+              return (
+                <Button variant="outline" onClick={() => setIsDetailDialogOpen(false)}>
+                  Close
                 </Button>
-                <Button
-                  onClick={() => handleFirstApproval(selectedInvoice)}
-                  disabled={processing || !canFirstApprove}
-                >
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  {processing ? "Processing..." : "Approve (1st Level)"}
-                </Button>
-              </>
-            )}
-            {(selectedInvoice?.approval_status === "pending_second_approval" ||
-              selectedInvoice?.approval_status === "pending_2nd_approval") && (
-              <>
-                {!canSecondApprove && (
-                  <p className="text-xs text-muted-foreground w-full text-center mb-2">
-                    You are not authorized to give final approval
-                  </p>
-                )}
-                <Button
-                  variant="destructive"
-                  onClick={() => setIsRejectDialogOpen(true)}
-                  disabled={processing || !canSecondApprove}
-                >
-                  <XCircle className="w-4 h-4 mr-2" />
-                  Reject
-                </Button>
-                <Button
-                  onClick={() => handleSecondApproval(selectedInvoice)}
-                  disabled={processing || !canSecondApprove}
-                >
-                  <CheckCheck className="w-4 h-4 mr-2" />
-                  {processing ? "Processing..." : "Final Approval"}
-                </Button>
-              </>
-            )}
-            {(selectedInvoice?.approval_status === "approved" || selectedInvoice?.approval_status === "rejected") && (
-              <Button variant="outline" onClick={() => setIsDetailDialogOpen(false)}>
-                Close
-              </Button>
-            )}
+              );
+            })()}
           </DialogFooter>
+          </>
+          )}
         </DialogContent>
       </Dialog>
 
