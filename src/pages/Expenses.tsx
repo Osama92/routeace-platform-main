@@ -283,16 +283,14 @@ const Expenses = () => {
         receiptUrl = await uploadReceipt() || "";
       }
 
-      const selectedBank = bankAccounts.find(b => b.id === formData.payment_account_id);
       const insertData = {
+        expense_date: formData.expense_date || new Date().toISOString().split("T")[0],
         category: formData.category as "fuel" | "maintenance" | "driver_salary" | "insurance" | "tolls" | "parking" | "repairs" | "administrative" | "marketing" | "utilities" | "rent" | "equipment" | "other",
         description: formData.description,
         amount: parseFloat(formData.amount),
         vendor_id: formData.vendor_id || null,
         vehicle_id: formData.vehicle_id || null,
         driver_id: formData.driver_id || null,
-        payment_account_id: formData.payment_account_id || null,
-        payment_account_name: selectedBank?.name || null,
         notes: formData.notes || null,
         is_recurring: formData.is_recurring,
         is_cogs: formData.is_cogs,
