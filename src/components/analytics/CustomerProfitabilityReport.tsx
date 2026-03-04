@@ -86,11 +86,10 @@ const CustomerProfitabilityReport = () => {
         .from("customers")
         .select("id, company_name");
 
-      // Fetch invoices grouped by customer
+      // Fetch all invoices — revenue = all raised (same logic as P&L and Invoices page)
       const { data: invoices } = await supabase
         .from("invoices")
-        .select("customer_id, total_amount, status")
-        .eq("status", "paid");
+        .select("customer_id, total_amount, status");
 
       // Fetch expenses with COGS flag and customer_id
       const { data: expenses } = await supabase

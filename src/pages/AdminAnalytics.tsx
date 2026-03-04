@@ -143,6 +143,10 @@ const AdminAnalytics = () => {
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
 
+  // P&L period selector — defaults to current month
+  const [pnlYear, setPnlYear] = useState(currentYear);
+  const [pnlMonth, setPnlMonth] = useState(currentMonth);
+
   const [targetForm, setTargetForm] = useState({
     target_type: "monthly",
     target_month: currentMonth.toString(),
@@ -156,17 +160,26 @@ const AdminAnalytics = () => {
 
   const fetchPnLData = async () => {
     try {
-      // Fetch all invoices for revenue (raised = revenue; paid = collected)
+      // Build date range for the selected month
+      const periodStart = `${pnlYear}-${String(pnlMonth).padStart(2, '0')}-01`;
+      const lastDay = new Date(pnlYear, pnlMonth, 0).getDate();
+      const periodEnd = `${pnlYear}-${String(pnlMonth).padStart(2, '0')}-${lastDay}T23:59:59`;
+
+      // Fetch invoices for selected month
       const { data: invoices, error: invError } = await supabase
         .from("invoices")
-        .select("total_amount, status, created_at");
+        .select("total_amount, status, created_at")
+        .gte("created_at", periodStart)
+        .lte("created_at", periodEnd);
 
       if (invError) throw invError;
 
-      // Fetch expenses with COGS flag
+      // Fetch expenses for selected month
       const { data: expenses, error: expError } = await supabase
         .from("expenses")
-        .select("amount, is_cogs, expense_date, category");
+        .select("amount, is_cogs, expense_date, category")
+        .gte("expense_date", periodStart.split("T")[0])
+        .lte("expense_date", periodEnd.split("T")[0]);
 
       if (expError) throw expError;
 
@@ -272,6 +285,11 @@ const AdminAnalytics = () => {
     };
     loadData();
   }, []);
+
+  // Re-fetch P&L when period changes (after initial load)
+  useEffect(() => {
+    fetchPnLData();
+  }, [pnlYear, pnlMonth]);
 
   const handleCreateTarget = async () => {
     if (!targetForm.revenue_target || !targetForm.profit_target) {
@@ -591,6 +609,33 @@ const AdminAnalytics = () => {
 
         {/* P&L Statement Tab */}
         <TabsContent value="pnl" className="space-y-6">
+          {/* Period selector */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <Select value={pnlMonth.toString()} onValueChange={(v) => setPnlMonth(Number(v))}>
+              <SelectTrigger className="w-36 bg-secondary/50 border-border/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {months.map((m, i) => (
+                  <SelectItem key={i + 1} value={(i + 1).toString()}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={pnlYear.toString()} onValueChange={(v) => setPnlYear(Number(v))}>
+              <SelectTrigger className="w-28 bg-secondary/50 border-border/50">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[currentYear - 2, currentYear - 1, currentYear].map((y) => (
+                  <SelectItem key={y} value={y.toString()}>{y}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span className="text-sm text-muted-foreground">
+              Showing P&L for {months[pnlMonth - 1]} {pnlYear}
+            </span>
+          </div>
+
           {/* KPI Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5">
