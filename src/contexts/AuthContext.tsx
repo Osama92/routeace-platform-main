@@ -14,6 +14,7 @@ interface AuthContextType {
   isApproved: boolean;
   approvalStatus: ApprovalStatus | null;
   suspensionReason: string | null;
+  grantedRoutes: Set<string>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: any }>;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
@@ -40,12 +41,26 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null);
   const [suspensionReason, setSuspensionReason] = useState<string | null>(null);
+  const [grantedRoutes, setGrantedRoutes] = useState<Set<string>>(new Set());
   const sessionIdRef = useRef<string | null>(null);
   // Tracks whether SIGNED_IN event already created a session record, so the
   // subsequent getSession() call does not create a duplicate on page load.
   const sessionCreatedByEventRef = useRef(false);
 
   const isApproved = approvalStatus === "approved";
+
+  const fetchGrantedRoutes = async (userId: string) => {
+    try {
+      const { data } = await (supabase as any)
+        .from("user_menu_overrides")
+        .select("menu_href")
+        .eq("user_id", userId)
+        .eq("hidden", false);
+      return new Set<string>((data || []).map((r: any) => r.menu_href as string));
+    } catch {
+      return new Set<string>();
+    }
+  };
 
   const fetchUserRole = async (userId: string) => {
     try {
@@ -189,6 +204,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             const { status, reason } = await fetchApprovalStatus(session.user.id, role);
             setApprovalStatus(status);
             setSuspensionReason(reason);
+            setGrantedRoutes(await fetchGrantedRoutes(session.user.id));
           }, 0);
         } else if (event === "SIGNED_OUT") {
           // Update session record on sign out
@@ -200,6 +216,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           setUserRole(null);
           setApprovalStatus(null);
           setSuspensionReason(null);
+          setGrantedRoutes(new Set());
         } else if (session?.user) {
           // For token refresh or other events, just fetch role and status
           setTimeout(async () => {
@@ -208,6 +225,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             const { status, reason } = await fetchApprovalStatus(session.user.id, role);
             setApprovalStatus(status);
             setSuspensionReason(reason);
+            setGrantedRoutes(await fetchGrantedRoutes(session.user.id));
           }, 0);
         }
         
@@ -236,6 +254,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         const { status, reason } = await fetchApprovalStatus(session.user.id, role);
         setApprovalStatus(status);
         setSuspensionReason(reason);
+        setGrantedRoutes(await fetchGrantedRoutes(session.user.id));
       }
       setLoading(false);
     });
@@ -317,6 +336,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         isApproved,
         approvalStatus,
         suspensionReason,
+        grantedRoutes,
         signUp,
         signIn,
         signOut,

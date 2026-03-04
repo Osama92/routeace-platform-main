@@ -9,7 +9,7 @@ interface ProtectedRouteProps {
 }
 
 const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
-  const { user, userRole, loading, isApproved, approvalStatus, suspensionReason } = useAuth();
+  const { user, userRole, loading, isApproved, approvalStatus, suspensionReason, grantedRoutes } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -54,8 +54,9 @@ const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
     return <PendingApprovalScreen />;
   }
 
-  // If roles are specified and user doesn't have any of the allowed roles
-  if (allowedRoles && allowedRoles.length > 0 && userRole && !allowedRoles.includes(userRole)) {
+  // If roles are specified and user doesn't have any of the allowed roles,
+  // also check if admin has explicitly granted this route to the user
+  if (allowedRoles && allowedRoles.length > 0 && userRole && !allowedRoles.includes(userRole) && !grantedRoutes.has(location.pathname)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="glass-card p-8 text-center max-w-md">
