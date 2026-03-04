@@ -214,16 +214,20 @@ const Expenses = () => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        toast({
-          title: "File too large",
-          description: "Please upload an image under 5MB",
-          variant: "destructive",
-        });
-        return;
-      }
-      setReceiptFile(file);
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: "File too large",
+        description: "Please upload a file under 5MB",
+        variant: "destructive",
+      });
+      return;
+    }
+    setReceiptFile(file);
+    if (file.type === "application/pdf") {
+      // Can't preview a PDF as an image — show a filename placeholder instead
+      setReceiptPreview(`__pdf__:${file.name}`);
+    } else {
       const reader = new FileReader();
       reader.onloadend = () => {
         setReceiptPreview(reader.result as string);
@@ -860,11 +864,18 @@ const Expenses = () => {
                     <div className="border-2 border-dashed border-border rounded-lg p-4">
                       {receiptPreview ? (
                         <div className="space-y-2">
-                          <img
-                            src={receiptPreview}
-                            alt="Receipt preview"
-                            className="max-h-32 mx-auto rounded"
-                          />
+                          {receiptPreview.startsWith("__pdf__:") ? (
+                            <div className="flex items-center justify-center gap-2 py-3 text-sm text-muted-foreground">
+                              <FileText className="w-6 h-6 text-primary" />
+                              <span className="truncate max-w-[200px]">{receiptPreview.replace("__pdf__:", "")}</span>
+                            </div>
+                          ) : (
+                            <img
+                              src={receiptPreview}
+                              alt="Receipt preview"
+                              className="max-h-32 mx-auto rounded"
+                            />
+                          )}
                           <Button
                             type="button"
                             variant="outline"
@@ -872,6 +883,7 @@ const Expenses = () => {
                             onClick={() => {
                               setReceiptFile(null);
                               setReceiptPreview("");
+                              if (fileInputRef.current) fileInputRef.current.value = "";
                             }}
                             className="w-full"
                           >
@@ -879,23 +891,27 @@ const Expenses = () => {
                           </Button>
                         </div>
                       ) : (
-                        <div
+                        // Use <label> instead of onClick+.click() — iOS Safari blocks
+                        // programmatic .click() on hidden file inputs for security reasons
+                        <label
+                          htmlFor="receipt-file-input"
                           className="flex flex-col items-center justify-center cursor-pointer py-4"
-                          onClick={() => fileInputRef.current?.click()}
                         >
                           <Upload className="w-8 h-8 text-muted-foreground mb-2" />
                           <p className="text-sm text-muted-foreground">
-                            Click to upload receipt image
+                            Tap to upload or take a photo
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            PNG, JPG up to 5MB
+                            PNG, JPG, PDF up to 5MB
                           </p>
-                        </div>
+                        </label>
                       )}
+                      {/* No ref needed — label[htmlFor] handles the trigger on all browsers */}
                       <input
+                        id="receipt-file-input"
                         ref={fileInputRef}
                         type="file"
-                        accept="image/*"
+                        accept="image/*,application/pdf"
                         onChange={handleFileChange}
                         className="hidden"
                       />
