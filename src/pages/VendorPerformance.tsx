@@ -126,17 +126,22 @@ const VendorPerformance = () => {
 
       if (partnersError) throw partnersError;
 
-      // Fetch dispatches with vendor-linked drivers
+      const DEFAULT_ETA_DAYS = 2;
+
+      // Fetch dispatches with vendor-linked drivers — include pickup dates and route ETA for correct OTD
       const { data: dispatchesData, error: dispatchesError } = await supabase
         .from("dispatches")
         .select(`
           id,
           status,
-          scheduled_delivery,
+          actual_pickup,
+          scheduled_pickup,
           actual_delivery,
+          created_at,
           cost,
           driver_id,
-          drivers!inner(partner_id)
+          drivers!inner(partner_id),
+          routes:route_id(estimated_duration_hours)
         `)
         .gte("created_at", start.toISOString())
         .lte("created_at", end.toISOString());
@@ -196,15 +201,20 @@ const VendorPerformance = () => {
         if (dispatch.status === "delivered") {
           vendor.completedTrips++;
 
-          // Check on-time delivery
-          if (dispatch.scheduled_delivery && dispatch.actual_delivery) {
-            const scheduled = new Date(dispatch.scheduled_delivery);
-            const actual = new Date(dispatch.actual_delivery);
-            
-            if (actual <= scheduled) {
-              vendor.onTimeDeliveries++;
-            } else {
-              vendor.lateDeliveries++;
+          // OTD: start priority actual_pickup → scheduled_pickup → created_at
+          const startDate = (dispatch as any).actual_pickup || (dispatch as any).scheduled_pickup || (dispatch as any).created_at;
+          if (startDate && dispatch.actual_delivery) {
+            const msInTransit = new Date(dispatch.actual_delivery).getTime() - new Date(startDate).getTime();
+            if (msInTransit >= 0) { // skip bad data
+              const daysInTransit = Math.ceil(msInTransit / (1000 * 60 * 60 * 24));
+              const routeRow = Array.isArray((dispatch as any).routes) ? (dispatch as any).routes[0] : (dispatch as any).routes;
+              const routeEta = routeRow?.estimated_duration_hours;
+              const targetDays = routeEta ? Number(routeEta) : DEFAULT_ETA_DAYS;
+              if (daysInTransit <= targetDays) {
+                vendor.onTimeDeliveries++;
+              } else {
+                vendor.lateDeliveries++;
+              }
             }
           }
         }
@@ -221,8 +231,10 @@ const VendorPerformance = () => {
 
       // Calculate derived metrics
       Object.values(metricsMap).forEach((vendor) => {
-        vendor.onTimeRate = vendor.completedTrips > 0
-          ? Math.round((vendor.onTimeDeliveries / vendor.completedTrips) * 100)
+        // Use only trips with timestamp data (onTime + late) as denominator
+        const trackedTrips = vendor.onTimeDeliveries + vendor.lateDeliveries;
+        vendor.onTimeRate = trackedTrips > 0
+          ? Math.round((vendor.onTimeDeliveries / trackedTrips) * 100)
           : 0;
         
         vendor.avgTripValue = vendor.completedTrips > 0

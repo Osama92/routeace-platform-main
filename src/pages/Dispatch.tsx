@@ -155,6 +155,9 @@ interface Dispatch {
   actual_delivery?: string | null;
   date_loaded?: string | null;
   delivery_commenced_at?: string | null;
+  actual_pickup?: string | null;
+  scheduled_pickup?: string | null;
+  route_id?: string | null;
   drivers?: { full_name: string } | null;
   vehicles?: {
     registration_number: string;
@@ -165,6 +168,7 @@ interface Dispatch {
     vendor?: { id: string; company_name: string } | null;
   } | null;
   customers?: { company_name: string } | null;
+  routes?: { name: string; estimated_duration_hours: number | null } | null;
 }
 
 interface Driver {
@@ -451,7 +455,8 @@ const DispatchPage = () => {
             *,
             drivers (full_name),
             vehicles (registration_number, vehicle_type, capacity_kg, fleet_type, vendor_id, vendor:vendor_id (id, company_name)),
-            customers (company_name)
+            customers (company_name),
+            routes:route_id (name, estimated_duration_hours)
           `)
           .order("created_at", { ascending: false }),
         supabase.from("drivers").select("id, full_name, status").eq("status", "available"),
@@ -2342,29 +2347,60 @@ const DispatchPage = () => {
                       <p className="text-xs text-muted-foreground">Vehicle</p>
                       <p className="font-medium">{selectedDispatch.vehicles?.registration_number || "—"}</p>
                     </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Route</p>
+                      <p className="font-medium">{selectedDispatch.routes?.name || "—"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Route ETA</p>
+                      <p className="font-medium">
+                        {selectedDispatch.routes?.estimated_duration_hours
+                          ? `${selectedDispatch.routes.estimated_duration_hours} day(s)`
+                          : "—"}
+                      </p>
+                    </div>
+                    {selectedDispatch.scheduled_pickup && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Scheduled Pickup</p>
+                        <p className="font-medium">{format(new Date(selectedDispatch.scheduled_pickup), "MMM dd, yyyy")}</p>
+                      </div>
+                    )}
+                    {selectedDispatch.actual_pickup && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Actual Pickup</p>
+                        <p className="font-medium">{format(new Date(selectedDispatch.actual_pickup), "MMM dd, yyyy HH:mm")}</p>
+                      </div>
+                    )}
+                    {selectedDispatch.actual_delivery && (
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Actual Delivery</p>
+                        <p className="font-medium">{format(new Date(selectedDispatch.actual_delivery), "MMM dd, yyyy HH:mm")}</p>
+                      </div>
+                    )}
                     {selectedDispatch.date_loaded && (
                       <div className="space-y-1">
                         <p className="text-xs text-muted-foreground">Date Loaded</p>
                         <p className="font-medium">{format(new Date(selectedDispatch.date_loaded), "MMM dd, yyyy HH:mm")}</p>
                       </div>
                     )}
-                    {selectedDispatch.delivery_commenced_at && (
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Delivery Commenced</p>
-                        <p className="font-medium">{format(new Date(selectedDispatch.delivery_commenced_at), "MMM dd, yyyy HH:mm")}</p>
-                      </div>
-                    )}
-                    {selectedDispatch.date_loaded && selectedDispatch.delivery_commenced_at && (
-                      <div className="space-y-1">
-                        <p className="text-xs text-muted-foreground">Days in Transit</p>
-                        <p className="font-semibold text-info">
-                          {Math.ceil(
-                            (new Date(selectedDispatch.delivery_commenced_at).getTime() - new Date(selectedDispatch.date_loaded).getTime()) /
-                            (1000 * 60 * 60 * 24)
-                          )} day(s)
-                        </p>
-                      </div>
-                    )}
+                    {(() => {
+                      const startDate = selectedDispatch.actual_pickup || selectedDispatch.scheduled_pickup || selectedDispatch.created_at;
+                      const endDate = selectedDispatch.actual_delivery;
+                      if (!startDate || !endDate) return null;
+                      const ms = new Date(endDate).getTime() - new Date(startDate).getTime();
+                      if (ms < 0) return null;
+                      const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+                      const eta = selectedDispatch.routes?.estimated_duration_hours ?? 2;
+                      const onTime = days <= eta;
+                      return (
+                        <div className="space-y-1 col-span-2">
+                          <p className="text-xs text-muted-foreground">OTD Status</p>
+                          <p className={`font-semibold ${onTime ? "text-success" : "text-destructive"}`}>
+                            {days} day(s) in transit — {onTime ? "✓ On Time" : "✗ Late"} (ETA: {eta} day(s))
+                          </p>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Route Map View */}

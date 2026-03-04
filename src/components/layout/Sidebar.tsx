@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 import {
   LayoutDashboard,
   Truck,
@@ -73,6 +74,9 @@ const Sidebar = () => {
   const location = useLocation();
   const { userRole, signOut, user } = useAuth();
   const [isMobile, setIsMobile] = useState(false);
+  const [hiddenMenus, setHiddenMenus] = useState<Set<string>>(new Set());
+  const [grantedMenus, setGrantedMenus] = useState<Set<string>>(new Set());
+  const fetchedUserId = useRef<string | null>(null);
 
   // Check screen size
   useEffect(() => {
@@ -91,10 +95,44 @@ const Sidebar = () => {
     }
   }, [location.pathname, isMobile, setIsOpen]);
 
-  const filteredNavigation = navigation.filter((item) => {
-    if (!userRole) return true;
-    return item.roles.includes(userRole);
-  });
+  // Fetch per-user menu overrides (hidden = removed access, hidden:false = granted extra access)
+  useEffect(() => {
+    if (!user?.id || fetchedUserId.current === user.id) return;
+    fetchedUserId.current = user.id;
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("user_menu_overrides")
+        .select("menu_href, hidden")
+        .eq("user_id", user.id);
+      const hidden = new Set<string>();
+      const granted = new Set<string>();
+      (data || []).forEach((r: any) => {
+        if (r.hidden) hidden.add(r.menu_href);
+        else granted.add(r.menu_href);
+      });
+      setHiddenMenus(hidden);
+      setGrantedMenus(granted);
+    })();
+  }, [user?.id]);
+
+  // All nav items across all sections, for granted-menu lookup
+  const allNavItems = [...navigation, ...supportNavigation, ...adminNavigation];
+
+  const filteredNavigation = [
+    // Role-permitted items minus hidden ones
+    ...navigation.filter((item) => {
+      if (!userRole) return true;
+      if (!item.roles.includes(userRole)) return false;
+      if (hiddenMenus.has(item.href)) return false;
+      return true;
+    }),
+    // Extra items granted by admin that are not already in the role
+    ...navigation.filter((item) => {
+      if (!userRole) return false;
+      if (item.roles.includes(userRole)) return false; // already included above
+      return grantedMenus.has(item.href);
+    }),
+  ];
 
   const handleSignOut = async () => {
     await signOut();
@@ -146,7 +184,8 @@ const Sidebar = () => {
         })}
 
         {/* Support/Operations Section */}
-        {(userRole === "admin" || userRole === "support" || userRole === "operations") && (
+        {(userRole === "admin" || userRole === "support" || userRole === "operations" ||
+          supportNavigation.some(item => grantedMenus.has(item.href))) && (
           <>
             {(!isCollapsed || isMobile) && (
               <div className="pt-4 pb-2">
@@ -156,7 +195,7 @@ const Sidebar = () => {
               </div>
             )}
             {supportNavigation
-              .filter(item => item.roles.includes(userRole || ""))
+              .filter(item => (item.roles.includes(userRole || "") || grantedMenus.has(item.href)) && !hiddenMenus.has(item.href))
               .map((item) => {
                 const isActive = location.pathname === item.href;
                 return (
@@ -178,7 +217,7 @@ const Sidebar = () => {
         )}
 
         {/* Admin Section */}
-        {userRole === "admin" && (
+        {(userRole === "admin" || adminNavigation.some(item => grantedMenus.has(item.href))) && (
           <>
             {(!isCollapsed || isMobile) && (
               <div className="pt-4 pb-2">
@@ -187,7 +226,7 @@ const Sidebar = () => {
                 </p>
               </div>
             )}
-            {adminNavigation.map((item) => {
+            {adminNavigation.filter(item => (userRole === "admin" || grantedMenus.has(item.href)) && !hiddenMenus.has(item.href)).map((item) => {
               const isActive = location.pathname === item.href;
               return (
                 <Link

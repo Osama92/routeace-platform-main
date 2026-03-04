@@ -57,7 +57,10 @@ import {
   RefreshCw,
   CheckCircle,
   XCircle,
+  LayoutDashboard,
+  Menu,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -92,6 +95,40 @@ const statusInfo: Record<string, { color: string; label: string; icon: React.Ele
   rejected: { color: "bg-muted text-muted-foreground", label: "Rejected", icon: XCircle },
 };
 
+// All navigable menus — must match Sidebar.tsx arrays
+const ALL_MENUS = [
+  // Main nav
+  { name: "Dashboard", href: "/", roles: ["admin", "operations", "support", "dispatcher", "driver"] },
+  { name: "Dispatch", href: "/dispatch", roles: ["admin", "operations", "dispatcher"] },
+  { name: "Tracking", href: "/tracking", roles: ["admin", "operations", "support", "dispatcher", "driver"] },
+  { name: "Drivers", href: "/drivers", roles: ["admin", "operations", "dispatcher"] },
+  { name: "Driver Payroll", href: "/driver-payroll", roles: ["admin"] },
+  { name: "Driver Bonuses", href: "/driver-bonuses", roles: ["admin"] },
+  { name: "Tax Filing", href: "/tax-filing-report", roles: ["admin"] },
+  { name: "Fleet", href: "/fleet", roles: ["admin", "operations"] },
+  { name: "Routes", href: "/routes", roles: ["admin"] },
+  { name: "Customers", href: "/customers", roles: ["admin", "support"] },
+  { name: "Partners", href: "/partners", roles: ["admin"] },
+  { name: "Partner Performance", href: "/vendor-performance", roles: ["admin", "operations"] },
+  { name: "Invoices", href: "/invoices", roles: ["admin", "support", "operations"] },
+  { name: "Expenses", href: "/expenses", roles: ["admin", "operations"] },
+  { name: "Analytics", href: "/analytics", roles: ["admin", "operations"] },
+  // Communications
+  { name: "Email Notifications", href: "/emails", roles: ["admin", "support", "operations"] },
+  // Admin
+  { name: "Pending Approvals", href: "/pending-approvals", roles: ["admin"] },
+  { name: "Invoice Approvals", href: "/invoice-approvals", roles: ["admin"] },
+  { name: "Expense Approvals", href: "/expense-approvals", roles: ["admin"] },
+  { name: "Trip Rate Config", href: "/trip-rate-config", roles: ["admin"] },
+  { name: "Historical Data", href: "/historical-data", roles: ["admin"] },
+  { name: "P&L Analytics", href: "/admin-analytics", roles: ["admin"] },
+  { name: "Session Analytics", href: "/session-analytics", roles: ["admin"] },
+  { name: "Session Alerts", href: "/session-alerts", roles: ["admin"] },
+  { name: "Email Templates", href: "/email-templates", roles: ["admin"] },
+  { name: "Users", href: "/users", roles: ["admin"] },
+  { name: "Settings", href: "/settings", roles: ["admin"] },
+];
+
 const UsersPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -105,7 +142,12 @@ const UsersPage = () => {
 
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [selectedRole, setSelectedRole] = useState<string>("");
-  
+
+  // Menu management
+  const [isMenuDialogOpen, setIsMenuDialogOpen] = useState(false);
+  const [menuOverrides, setMenuOverrides] = useState<Record<string, boolean>>({}); // href -> hidden
+  const [savingMenus, setSavingMenus] = useState(false);
+
   // Approval/Suspend dialogs
   const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
   const [approvalAction, setApprovalAction] = useState<"approve" | "reject">("approve");
@@ -423,6 +465,48 @@ const UsersPage = () => {
     }
   };
 
+  const handleOpenMenuDialog = async (user: UserProfile) => {
+    setSelectedUser(user);
+    // Fetch existing overrides for this user
+    const { data } = await (supabase as any)
+      .from("user_menu_overrides")
+      .select("menu_href, hidden")
+      .eq("user_id", user.user_id);
+    const map: Record<string, boolean> = {};
+    (data || []).forEach((r: any) => { map[r.menu_href] = r.hidden; });
+    setMenuOverrides(map);
+    setIsMenuDialogOpen(true);
+  };
+
+  const handleSaveMenuOverrides = async () => {
+    if (!selectedUser) return;
+    setSavingMenus(true);
+    try {
+      // Delete all existing overrides for this user, then insert fresh set
+      await (supabase as any)
+        .from("user_menu_overrides")
+        .delete()
+        .eq("user_id", selectedUser.user_id);
+
+      const rows = Object.entries(menuOverrides).map(([menu_href, hidden]) => ({
+        user_id: selectedUser.user_id,
+        menu_href,
+        hidden,
+      }));
+      if (rows.length > 0) {
+        await (supabase as any)
+          .from("user_menu_overrides")
+          .insert(rows);
+      }
+      toast({ title: "Menu access updated", description: `Saved menu settings for ${selectedUser.full_name}` });
+      setIsMenuDialogOpen(false);
+    } catch (e: any) {
+      toast({ title: "Failed to save", description: e.message, variant: "destructive" });
+    } finally {
+      setSavingMenus(false);
+    }
+  };
+
   const getFilteredUsers = () => {
     let filtered = users;
 
@@ -590,6 +674,10 @@ const UsersPage = () => {
                                 Remove Role
                               </DropdownMenuItem>
                             )}
+                            <DropdownMenuItem onClick={() => handleOpenMenuDialog(user)}>
+                              <Menu className="w-4 h-4 mr-2" />
+                              Manage Menus
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => {
@@ -840,6 +928,105 @@ const UsersPage = () => {
         onConfirm={handleSuspendReactivate}
         loading={saving}
       />
+
+      {/* Manage Menus Dialog */}
+      <Dialog open={isMenuDialogOpen} onOpenChange={setIsMenuDialogOpen}>
+        <DialogContent className="sm:max-w-[500px] max-h-[82vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="font-heading flex items-center gap-2">
+              <Menu className="w-5 h-5" />
+              Manage Menus — {selectedUser?.full_name}
+            </DialogTitle>
+            <DialogDescription>
+              Turn menus on or off for this user. Menus outside their role can be individually granted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto py-2 space-y-4">
+            {(() => {
+              const userMenuRole = selectedUser?.role || "";
+              const roleMenus = ALL_MENUS.filter(m => m.roles.includes(userMenuRole));
+              const extraMenus = ALL_MENUS.filter(m => !m.roles.includes(userMenuRole));
+
+              const renderMenuRow = (menu: typeof ALL_MENUS[0], hasRoleAccess: boolean) => {
+                // Effective access: role grants + not hidden, OR explicitly granted (hidden:false in overrides)
+                const override = menuOverrides[menu.href];
+                // override === true → hidden, override === false → explicitly granted, undefined → default
+                let isVisible: boolean;
+                if (override === true) isVisible = false;           // explicitly hidden
+                else if (override === false) isVisible = true;       // explicitly granted
+                else isVisible = hasRoleAccess;                      // default from role
+
+                return (
+                  <div
+                    key={menu.href}
+                    className="flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-secondary/40"
+                  >
+                    <div className="flex items-center gap-3">
+                      <LayoutDashboard className="w-4 h-4 text-muted-foreground" />
+                      <div>
+                        <span className="text-sm font-medium text-foreground">{menu.name}</span>
+                        {!hasRoleAccess && (
+                          <span className="ml-2 text-xs text-warning bg-warning/10 px-1.5 py-0.5 rounded">Extra Access</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${isVisible ? "text-success" : "text-muted-foreground"}`}>
+                        {isVisible ? "Visible" : "Hidden"}
+                      </span>
+                      <Switch
+                        checked={isVisible}
+                        onCheckedChange={(checked) => {
+                          setMenuOverrides(prev => {
+                            const next = { ...prev };
+                            if (hasRoleAccess) {
+                              // Role has it by default: hidden=true removes it, undefined restores default
+                              if (!checked) next[menu.href] = true;
+                              else delete next[menu.href];
+                            } else {
+                              // Role doesn't have it: hidden=false grants it, undefined means no access
+                              if (checked) next[menu.href] = false;
+                              else delete next[menu.href];
+                            }
+                            return next;
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              };
+
+              return (
+                <>
+                  {roleMenus.length > 0 && (
+                    <div>
+                      <p className="px-3 pb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                        Role Menus ({userMenuRole || "no role"})
+                      </p>
+                      {roleMenus.map(m => renderMenuRow(m, true))}
+                    </div>
+                  )}
+                  <div>
+                    <p className="px-3 pb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      Grant Extra Access
+                    </p>
+                    {extraMenus.map(m => renderMenuRow(m, false))}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+          <DialogFooter className="pt-2 border-t border-border/50">
+            <Button variant="outline" onClick={() => setIsMenuDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveMenuOverrides} disabled={savingMenus}>
+              {savingMenus ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };

@@ -3,13 +3,7 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import {
   AreaChart,
   Area,
@@ -39,7 +33,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { subDays, subHours, format, startOfDay, endOfDay } from "date-fns";
+import { subDays, format, startOfDay, endOfDay } from "date-fns";
 
 const formatCurrency = (value: number) => {
   if (value >= 1000000) {
@@ -48,8 +42,12 @@ const formatCurrency = (value: number) => {
   return `₦${(value / 1000).toFixed(0)}K`;
 };
 
+// Format a Date as YYYY-MM-DD for <input type="date">
+const toDateInput = (d: Date) => format(d, "yyyy-MM-dd");
+
 const AnalyticsPage = () => {
-  const [timeRange, setTimeRange] = useState("7d");
+  const [startDate, setStartDate] = useState(() => toDateInput(subDays(new Date(), 30)));
+  const [endDate, setEndDate] = useState(() => toDateInput(new Date()));
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const { toast } = useToast();
@@ -60,7 +58,8 @@ const AnalyticsPage = () => {
 
   const [kpis, setKpis] = useState({
     totalDeliveries: 0,
-    onTimeRate: 0,
+    avgTransitDays: 0,
+    avgTargetDays: 0,
     revenueMtd: 0,
     avgDistance: 0,
   });
@@ -71,37 +70,38 @@ const AnalyticsPage = () => {
   const [topRoutes, setTopRoutes] = useState<any[]>([]);
   const [driverPerformance, setDriverPerformance] = useState<any[]>([]);
 
-  const getDateRange = (range: string) => {
-    const now = new Date();
-    switch (range) {
-      case "24h":
-        return { start: subHours(now, 24), end: now };
-      case "7d":
-        return { start: subDays(now, 7), end: now };
-      case "30d":
-        return { start: subDays(now, 30), end: now };
-      case "90d":
-        return { start: subDays(now, 90), end: now };
-      default:
-        return { start: subDays(now, 7), end: now };
-    }
-  };
-
   useEffect(() => {
     fetchAnalyticsData();
-  }, [timeRange]);
+  }, [startDate, endDate]);
 
   const fetchAnalyticsData = async () => {
     setLoading(true);
     try {
-      const { start, end } = getDateRange(timeRange);
+      const start = startOfDay(new Date(startDate + "T00:00:00"));
+      const end = endOfDay(new Date(endDate + "T00:00:00"));
       const startISO = start.toISOString();
       const endISO = end.toISOString();
 
-      // Fetch dispatches in date range
+      const DEFAULT_ETA_DAYS = 2;
+
+      // Helper: is a delivered dispatch on-time based on route ETA?
+      // Start priority: actual_pickup → scheduled_pickup → created_at (covers all dispatch flows)
+      const isOnTime = (d: any): boolean => {
+        const startDate = d.actual_pickup || d.scheduled_pickup || d.created_at;
+        const deliveryDate = d.actual_delivery;
+        if (!startDate || !deliveryDate) return false;
+        const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
+        if (msInTransit < 0) return false; // bad data guard
+        const daysInTransit = Math.ceil(msInTransit / (1000 * 60 * 60 * 24));
+        const routeRow = Array.isArray(d.routes) ? d.routes[0] : d.routes;
+        const routeEtaDays = routeRow?.estimated_duration_hours;
+        return daysInTransit <= (routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS);
+      };
+
+      // Fetch dispatches in date range — include pickup dates and route ETA for correct OTD
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, status, distance_km, scheduled_delivery, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id")
+        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, routes:route_id(estimated_duration_hours)")
         .gte("created_at", startISO)
         .lte("created_at", endISO);
 
@@ -120,7 +120,7 @@ const AnalyticsPage = () => {
       // Fetch dispatches with driver info for period-specific driver performance
       const { data: driverDispatches } = await supabase
         .from("dispatches")
-        .select("driver_id, status, scheduled_delivery, actual_delivery, drivers:driver_id(full_name, rating, status)")
+        .select("driver_id, status, actual_pickup, scheduled_pickup, actual_delivery, created_at, drivers:driver_id(full_name, rating, status), routes:route_id(estimated_duration_hours)")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
         .not("driver_id", "is", null);
@@ -136,48 +136,61 @@ const AnalyticsPage = () => {
       // Calculate KPIs
       const deliveredDispatches = dispatches?.filter(d => d.status === "delivered") || [];
       const totalDeliveries = deliveredDispatches.length;
-      
-      const onTimeDeliveries = deliveredDispatches.filter(d => 
-        d.scheduled_delivery && d.actual_delivery && 
-        new Date(d.actual_delivery) <= new Date(d.scheduled_delivery)
-      ).length;
-      const onTimeRate = totalDeliveries > 0 ? (onTimeDeliveries / totalDeliveries) * 100 : 0;
+
+      // OTD: average actual transit days vs average route target days
+      const DEFAULT_ETA_DAYS_KPI = 2;
+      let totalTransitDays = 0;
+      let totalTargetDays = 0;
+      let deliveryCount = 0;
+      deliveredDispatches.forEach((d: any) => {
+        const startD = d.actual_pickup || d.scheduled_pickup || d.created_at;
+        if (startD && d.actual_delivery) {
+          const ms = new Date(d.actual_delivery).getTime() - new Date(startD).getTime();
+          if (ms < 0) return;
+          deliveryCount++;
+          totalTransitDays += Math.ceil(ms / (1000 * 60 * 60 * 24));
+          const routeRow = Array.isArray(d.routes) ? d.routes[0] : d.routes;
+          totalTargetDays += routeRow?.estimated_duration_hours ? Number(routeRow.estimated_duration_hours) : DEFAULT_ETA_DAYS_KPI;
+        }
+      });
+      const avgTransitDays = deliveryCount > 0 ? Math.round((totalTransitDays / deliveryCount) * 10) / 10 : 0;
+      const avgTargetDays = deliveryCount > 0 ? Math.round((totalTargetDays / deliveryCount) * 10) / 10 : DEFAULT_ETA_DAYS_KPI;
 
       const revenueMtd = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0) || 0;
-      
+
       const totalDistance = deliveredDispatches.reduce((sum, d) => sum + Number(d.distance_km || 0), 0);
       const avgDistance = totalDeliveries > 0 ? totalDistance / totalDeliveries : 0;
 
-      setKpis({ totalDeliveries, onTimeRate, revenueMtd, avgDistance });
+      setKpis({ totalDeliveries, avgTransitDays, avgTargetDays, revenueMtd, avgDistance });
 
-      // Generate delivery trend data based on time range
+      // Generate delivery trend: daily buckets across selected range
       const deliveryTrend: any[] = [];
-      const daysToShow = timeRange === "24h" ? 24 : timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90;
-      
-      for (let i = daysToShow - 1; i >= 0; i--) {
-        const date = timeRange === "24h" 
-          ? subHours(new Date(), i)
-          : subDays(new Date(), i);
-        
-        const dayStart = timeRange === "24h" ? date : startOfDay(date);
-        const dayEnd = timeRange === "24h" ? date : endOfDay(date);
-        
-        const dayDispatches = dispatches?.filter(d => {
+      const totalDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      // Limit to 90 points; for long ranges bucket by week or month
+      const useDailyBuckets = totalDays <= 90;
+      const bucketCount = useDailyBuckets ? totalDays : Math.ceil(totalDays / 7);
+
+      for (let i = 0; i < bucketCount; i++) {
+        const bucketStart = useDailyBuckets
+          ? startOfDay(new Date(start.getTime() + i * 86400000))
+          : startOfDay(new Date(start.getTime() + i * 7 * 86400000));
+        const bucketEnd = useDailyBuckets
+          ? endOfDay(bucketStart)
+          : endOfDay(new Date(Math.min(bucketStart.getTime() + 6 * 86400000, end.getTime())));
+
+        const bucketDispatches = dispatches?.filter(d => {
           const created = new Date(d.created_at);
-          return created >= dayStart && created <= dayEnd;
+          return created >= bucketStart && created <= bucketEnd;
         }) || [];
 
-        const delivered = dayDispatches.filter(d => d.status === "delivered").length;
-        const delayed = dayDispatches.filter(d => 
-          d.status === "delivered" && d.scheduled_delivery && d.actual_delivery &&
-          new Date(d.actual_delivery) > new Date(d.scheduled_delivery)
+        const delivered = bucketDispatches.filter(d => d.status === "delivered").length;
+        const delayed = bucketDispatches.filter((d: any) =>
+          d.status === "delivered" && !isOnTime(d)
         ).length;
 
         deliveryTrend.push({
-          date: timeRange === "24h" 
-            ? format(date, "HH:mm")
-            : format(date, "MMM d"),
-          deliveries: dayDispatches.length,
+          date: useDailyBuckets ? format(bucketStart, "MMM d") : `${format(bucketStart, "MMM d")}–${format(bucketEnd, "d")}`,
+          deliveries: bucketDispatches.length,
           onTime: delivered - delayed,
           delayed,
         });
@@ -231,16 +244,18 @@ const AnalyticsPage = () => {
           rating: driverInfo?.rating || 0,
           trips: 0,
           onTime: 0,
-          trackedOnTime: 0, // count of delivered trips that had scheduled_delivery set
+          trackedOnTime: 0, // delivered trips with actual_pickup stamped (trackable)
           total: 0,
           status: driverInfo?.status || "available",
         };
         existing.total++;
         if (d.status === "delivered") {
           existing.trips++;
-          if (d.scheduled_delivery) {
+          // Count OTD using fallback start dates so historical dispatches are included
+          const startDate = d.actual_pickup || d.scheduled_pickup || d.created_at;
+          if (startDate && d.actual_delivery) {
             existing.trackedOnTime++;
-            if (d.actual_delivery && new Date(d.actual_delivery) <= new Date(d.scheduled_delivery)) {
+            if (isOnTime(d)) {
               existing.onTime++;
             }
           }
@@ -280,74 +295,33 @@ const AnalyticsPage = () => {
         .slice(0, 5);
       setDriverPerformance(driverPerfArray);
 
-      // Revenue trend — bucketed to match the selected timeRange
+      // Revenue trend — daily buckets for ≤60 days, weekly for longer ranges
       const revenueTrend: any[] = [];
+      const revUseDailyBuckets = totalDays <= 60;
+      const revBucketCount = revUseDailyBuckets ? totalDays : Math.ceil(totalDays / 7);
 
-      if (timeRange === "24h") {
-        // Hourly buckets for last 24 hours
-        for (let i = 23; i >= 0; i--) {
-          const bucketStart = subHours(new Date(), i + 1);
-          const bucketEnd = subHours(new Date(), i);
-          const bucketInvoices = invoices?.filter(inv => {
-            const d = new Date(inv.created_at);
-            return d >= bucketStart && d < bucketEnd;
-          }) || [];
-          const bucketExpenses = expenses?.filter(e => {
-            const d = new Date(e.expense_date);
-            return d >= bucketStart && d < bucketEnd;
-          }) || [];
-          revenueTrend.push({
-            month: format(bucketEnd, "HH:mm"),
-            revenue: bucketInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0),
-            costs: bucketExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
-          });
-        }
-      } else if (timeRange === "7d") {
-        // Daily buckets for last 7 days
-        for (let i = 6; i >= 0; i--) {
-          const day = subDays(new Date(), i);
-          const dayStart = startOfDay(day);
-          const dayEnd = endOfDay(day);
-          const dayInvoices = invoices?.filter(inv => {
-            const d = new Date(inv.created_at);
-            return d >= dayStart && d <= dayEnd;
-          }) || [];
-          const dayExpenses = expenses?.filter(e => {
-            const d = new Date(e.expense_date);
-            return d >= dayStart && d <= dayEnd;
-          }) || [];
-          revenueTrend.push({
-            month: format(day, "MMM d"),
-            revenue: dayInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0),
-            costs: dayExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
-          });
-        }
-      } else {
-        // Monthly buckets for 30d / 90d
-        const monthCount = timeRange === "30d" ? 1 : 3;
-        for (let i = monthCount - 1; i >= 0; i--) {
-          const monthStart = new Date();
-          monthStart.setMonth(monthStart.getMonth() - i);
-          monthStart.setDate(1);
-          monthStart.setHours(0, 0, 0, 0);
-          const monthEnd = new Date(monthStart);
-          monthEnd.setMonth(monthEnd.getMonth() + 1);
-          monthEnd.setDate(0);
-          monthEnd.setHours(23, 59, 59, 999);
-          const monthInvoices = invoices?.filter(inv => {
-            const d = new Date(inv.created_at);
-            return d >= monthStart && d <= monthEnd;
-          }) || [];
-          const monthExpenses = expenses?.filter(e => {
-            const d = new Date(e.expense_date);
-            return d >= monthStart && d <= monthEnd;
-          }) || [];
-          revenueTrend.push({
-            month: format(monthStart, "MMM yyyy"),
-            revenue: monthInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0),
-            costs: monthExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
-          });
-        }
+      for (let i = 0; i < revBucketCount; i++) {
+        const bucketStart = revUseDailyBuckets
+          ? startOfDay(new Date(start.getTime() + i * 86400000))
+          : startOfDay(new Date(start.getTime() + i * 7 * 86400000));
+        const bucketEnd = revUseDailyBuckets
+          ? endOfDay(bucketStart)
+          : endOfDay(new Date(Math.min(bucketStart.getTime() + 6 * 86400000, end.getTime())));
+
+        const bucketInvoices = invoices?.filter(inv => {
+          const d = new Date(inv.created_at);
+          return d >= bucketStart && d <= bucketEnd;
+        }) || [];
+        const bucketExpenses = expenses?.filter(e => {
+          const d = new Date(e.expense_date);
+          return d >= bucketStart && d <= bucketEnd;
+        }) || [];
+
+        revenueTrend.push({
+          month: revUseDailyBuckets ? format(bucketStart, "MMM d") : `${format(bucketStart, "MMM d")}–${format(bucketEnd, "d")}`,
+          revenue: bucketInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0),
+          costs: bucketExpenses.reduce((s, e) => s + Number(e.amount || 0), 0),
+        });
       }
       setRevenueData(revenueTrend);
 
@@ -377,7 +351,7 @@ const AnalyticsPage = () => {
       // Date range
       doc.setFontSize(10);
       doc.setTextColor(100);
-      doc.text(`Time Range: ${timeRange === "24h" ? "Last 24 Hours" : timeRange === "7d" ? "Last 7 Days" : timeRange === "30d" ? "Last 30 Days" : "Last 90 Days"}`, pageWidth / 2, 28, { align: "center" });
+      doc.text(`Date Range: ${startDate} to ${endDate}`, pageWidth / 2, 28, { align: "center" });
       doc.text(`Generated: ${new Date().toLocaleDateString()}`, pageWidth / 2, 34, { align: "center" });
 
       // KPIs
@@ -388,7 +362,7 @@ const AnalyticsPage = () => {
       doc.setFontSize(10);
       doc.setTextColor(60);
       doc.text(`Total Deliveries: ${kpis.totalDeliveries}`, 14, 56);
-      doc.text(`On-Time Rate: ${kpis.onTimeRate.toFixed(1)}%`, 14, 63);
+      doc.text(`Avg Transit Days: ${kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d (Target: ${kpis.avgTargetDays}d)` : "No deliveries"}`, 14, 63);
       doc.text(`Revenue: ${formatCurrency(kpis.revenueMtd)}`, 14, 70);
       doc.text(`Avg. Distance: ${kpis.avgDistance.toFixed(0)} km`, 14, 77);
 
@@ -430,7 +404,7 @@ const AnalyticsPage = () => {
         });
       }
 
-      doc.save(`analytics-report-${timeRange}-${new Date().toISOString().split("T")[0]}.pdf`);
+      doc.save(`analytics-report-${startDate}-to-${endDate}.pdf`);
       toast({
         title: "Report Downloaded",
         description: "Analytics report has been saved as PDF",
@@ -463,20 +437,25 @@ const AnalyticsPage = () => {
       subtitle="Performance insights and business intelligence"
     >
       {/* Controls */}
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-4">
-          <Select value={timeRange} onValueChange={setTimeRange}>
-            <SelectTrigger className="w-40 bg-secondary/50 border-border/50">
-              <Calendar className="w-4 h-4 mr-2" />
-              <SelectValue placeholder="Time range" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="24h">Last 24 hours</SelectItem>
-              <SelectItem value="7d">Last 7 days</SelectItem>
-              <SelectItem value="30d">Last 30 days</SelectItem>
-              <SelectItem value="90d">Last 90 days</SelectItem>
-            </SelectContent>
-          </Select>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
+        <div className="flex flex-wrap items-center gap-2">
+          <Calendar className="w-4 h-4 text-muted-foreground" />
+          <Input
+            type="date"
+            value={startDate}
+            max={endDate}
+            onChange={e => setStartDate(e.target.value)}
+            className="w-40 bg-secondary/50 border-border/50 text-sm"
+          />
+          <span className="text-muted-foreground text-sm">to</span>
+          <Input
+            type="date"
+            value={endDate}
+            min={startDate}
+            max={toDateInput(new Date())}
+            onChange={e => setEndDate(e.target.value)}
+            className="w-40 bg-secondary/50 border-border/50 text-sm"
+          />
         </div>
         <Button variant="outline" onClick={handleExportReport} disabled={exporting}>
           <Download className="w-4 h-4 mr-2" />
@@ -490,15 +469,29 @@ const AnalyticsPage = () => {
           {
             title: "Total Deliveries",
             value: kpis.totalDeliveries.toString(),
-            change: `${timeRange === "24h" ? "24h" : timeRange === "7d" ? "7d" : timeRange === "30d" ? "30d" : "90d"}`,
+            change: (() => {
+              const s = new Date(startDate + "T00:00:00");
+              const e = new Date(endDate + "T00:00:00");
+              const sLabel = format(s, "MMM yyyy");
+              const eLabel = format(e, "MMM yyyy");
+              return sLabel === eLabel ? sLabel : `${format(s, "MMM")} – ${format(e, "MMM yyyy")}`;
+            })(),
             positive: true,
             icon: Truck,
           },
           {
-            title: "On-Time Rate",
-            value: `${kpis.onTimeRate.toFixed(1)}%`,
-            change: kpis.onTimeRate >= 90 ? "Good" : "Needs Improvement",
-            positive: kpis.onTimeRate >= 90,
+            title: "Avg Transit Days",
+            value: kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d` : "—",
+            change: kpis.avgTransitDays > 0
+              ? (() => {
+                  const otdPct = Math.round((kpis.avgTargetDays / kpis.avgTransitDays) * 100);
+                  const status = kpis.avgTransitDays <= kpis.avgTargetDays
+                    ? `On Track (${otdPct}%)`
+                    : `+${(kpis.avgTransitDays - kpis.avgTargetDays).toFixed(1)}d over (${otdPct}%)`;
+                  return `Target: ${kpis.avgTargetDays}d — ${status}`;
+                })()
+              : "No deliveries yet",
+            positive: kpis.avgTransitDays === 0 || kpis.avgTransitDays <= kpis.avgTargetDays,
             icon: Clock,
           },
           // Only show Revenue KPI for non-Operations users

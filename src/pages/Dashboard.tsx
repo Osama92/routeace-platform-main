@@ -37,8 +37,8 @@ const Dashboard = () => {
 
   const [kpis, setKpis] = useState({
     activeShipments: 0,
-    onTimeRate: 0,
-    avgEtaDays: 0,
+    avgTransitDays: 0,       // actual average days in transit (delivered dispatches MTD)
+    avgTargetDays: 0,        // average route ETA days (target) for those same dispatches
     fleetUtilizationText: "—",
     totalDistanceKm: 0,
     revenueMtd: 0,
@@ -117,80 +117,40 @@ const Dashboard = () => {
         avgCostPerKm = totalDistanceKm > 0 ? totalCost / totalDistanceKm : 0;
       }
 
-      // On-Time Delivery (OTD) - based on per-dispatch route ETA days
-      // A delivery is "on-time" if days in transit <= the route's ETA (days)
-      // Falls back to 2 days if no route ETA is set
+      // OTD: measure avg actual transit days vs avg route target days for delivered dispatches MTD
       const DEFAULT_ETA_DAYS = 2;
 
-      // Get all delivered dispatches this month with route ETA
       const { data: deliveredWithDates } = await supabase
         .from("dispatches")
-        .select("id, date_loaded, delivery_commenced_at, actual_delivery, routes:route_id (estimated_duration_hours)")
+        .select("id, actual_pickup, scheduled_pickup, actual_delivery, created_at, routes:route_id (estimated_duration_hours)")
         .eq("status", "delivered")
         .gte("created_at", start);
 
-      // Calculate OTD rate using per-dispatch route ETA
-      let onTimeCount = 0;
-      let totalWithTransitData = 0;
+      let totalTransitDays = 0;
+      let totalTargetDays = 0;
+      let deliveryCount = 0;
 
       (deliveredWithDates || []).forEach((dispatch: any) => {
-        const startDate = dispatch.date_loaded;
-        const endDate = dispatch.delivery_commenced_at || dispatch.actual_delivery;
-        const routeEtaDays = dispatch.routes?.estimated_duration_hours;
+        const startDate = dispatch.actual_pickup || dispatch.scheduled_pickup || dispatch.created_at;
+        const deliveryDate = dispatch.actual_delivery;
+        const routeRow = Array.isArray(dispatch.routes) ? dispatch.routes[0] : dispatch.routes;
+        const routeEtaDays = routeRow?.estimated_duration_hours;
 
-        if (startDate && endDate) {
-          totalWithTransitData++;
-          const daysInTransit = Math.ceil(
-            (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)
-          );
-          // Use dispatch's route ETA days as target, fall back to default
-          const targetDays = routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS;
-          if (daysInTransit <= targetDays) {
-            onTimeCount++;
-          }
+        if (startDate && deliveryDate) {
+          const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
+          if (msInTransit < 0) return; // skip bad data
+          deliveryCount++;
+          totalTransitDays += Math.ceil(msInTransit / (1000 * 60 * 60 * 24));
+          totalTargetDays += routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS;
         }
       });
 
-      // Compute average ETA days from ALL non-cancelled dispatches created this month
-      const { data: allDispatchesWithEta } = await supabase
-        .from("dispatches")
-        .select("routes:route_id (estimated_duration_hours)")
-        .gte("created_at", start)
-        .not("status", "eq", "cancelled");
-
-      let avgEtaTotal = 0;
-      let avgEtaCount = 0;
-      (allDispatchesWithEta || []).forEach((d: any) => {
-        const eta = d.routes?.estimated_duration_hours;
-        if (eta) {
-          avgEtaTotal += Number(eta);
-          avgEtaCount++;
-        }
-      });
-      const avgEtaDays = avgEtaCount > 0 ? Math.round((avgEtaTotal / avgEtaCount) * 10) / 10 : DEFAULT_ETA_DAYS;
-
-      // If no transit data available, fall back to completion rate
-      let onTimeRate = 0;
-      if (totalWithTransitData > 0) {
-        onTimeRate = (onTimeCount / totalWithTransitData) * 100;
-      } else {
-        // Fallback: use completion rate (delivered / total non-cancelled)
-        const { count: deliveredCount } = await supabase
-          .from("dispatches")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "delivered")
-          .gte("updated_at", start);
-
-        const { count: totalDispatchCount } = await supabase
-          .from("dispatches")
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", start)
-          .not("status", "eq", "cancelled");
-
-        onTimeRate = totalDispatchCount && totalDispatchCount > 0
-          ? ((deliveredCount || 0) / totalDispatchCount) * 100
-          : 0;
-      }
+      const avgTransitDays = deliveryCount > 0
+        ? Math.round((totalTransitDays / deliveryCount) * 10) / 10
+        : 0;
+      const avgTargetDays = deliveryCount > 0
+        ? Math.round((totalTargetDays / deliveryCount) * 10) / 10
+        : DEFAULT_ETA_DAYS;
 
       // Fleet utilization: vehicles currently assigned to active dispatches / total available/in_use vehicles
       const { count: totalVehicles } = await supabase
@@ -214,8 +174,8 @@ const Dashboard = () => {
 
       setKpis({
         activeShipments: activeCount || 0,
-        onTimeRate,
-        avgEtaDays,
+        avgTransitDays,
+        avgTargetDays,
         fleetUtilizationText,
         totalDistanceKm,
         revenueMtd,
@@ -239,10 +199,15 @@ const Dashboard = () => {
           isFinancial: false,
         },
         {
-          title: `OTD Rate (avg ${kpis.avgEtaDays}d)`,
-          value: `${kpis.onTimeRate.toFixed(1)}%`,
-          change: `Avg ETA: ${kpis.avgEtaDays} day${kpis.avgEtaDays !== 1 ? "s" : ""}`,
-          changeType: kpis.onTimeRate >= 80 ? "positive" as const : kpis.onTimeRate >= 50 ? "neutral" as const : "negative" as const,
+          title: "Avg Transit Days (MTD)",
+          value: kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d` : "—",
+          change: kpis.avgTransitDays > 0
+            ? `Target: ${kpis.avgTargetDays}d — ${kpis.avgTransitDays <= kpis.avgTargetDays ? "On Track" : `+${(kpis.avgTransitDays - kpis.avgTargetDays).toFixed(1)}d over`}`
+            : "No deliveries yet",
+          changeType: kpis.avgTransitDays === 0 ? "neutral" as const
+            : kpis.avgTransitDays <= kpis.avgTargetDays ? "positive" as const
+            : kpis.avgTransitDays <= kpis.avgTargetDays + 1 ? "neutral" as const
+            : "negative" as const,
           icon: Clock,
           link: "/dispatch",
           isFinancial: false,
