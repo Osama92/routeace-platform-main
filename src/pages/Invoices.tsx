@@ -1265,6 +1265,19 @@ const InvoicesPage = () => {
     });
   };
 
+  const handleDeleteInvoice = async (invoice: Invoice) => {
+    if (!window.confirm(`Delete invoice ${invoice.invoice_number}? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from("invoices").delete().eq("id", invoice.id);
+      if (error) throw error;
+      toast({ title: "Invoice Deleted", description: `Invoice ${invoice.invoice_number} has been deleted.` });
+      setSelectedInvoice(null);
+      fetchInvoices();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to delete invoice", variant: "destructive" });
+    }
+  };
+
   return (
     <DashboardLayout
       title="Invoices"
@@ -1928,6 +1941,14 @@ const InvoicesPage = () => {
                                   Sync to Zoho
                                 </DropdownMenuItem>
                               )}
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() => handleDeleteInvoice(invoice)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Delete Invoice
+                              </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         )}
@@ -2455,6 +2476,16 @@ const InvoicesPage = () => {
                 <Button variant="outline" onClick={() => setSelectedInvoice(null)}>
                   Close
                 </Button>
+                {canManage && (
+                  <Button
+                    variant="outline"
+                    className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => handleDeleteInvoice(selectedInvoice)}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete Invoice
+                  </Button>
+                )}
                 {canCreateInvoice && (
                   <Button
                     variant="outline"

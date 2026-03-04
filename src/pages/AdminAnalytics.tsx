@@ -69,6 +69,7 @@ import BudgetVarianceAnalysis from "@/components/analytics/BudgetVarianceAnalysi
 
 interface PnLData {
   revenue: number;
+  collected: number;
   cogs: number;
   grossProfit: number;
   operatingExpenses: number;
@@ -120,6 +121,7 @@ const months = [
 const AdminAnalytics = () => {
   const [pnlData, setPnlData] = useState<PnLData>({
     revenue: 0,
+    collected: 0,
     cogs: 0,
     grossProfit: 0,
     operatingExpenses: 0,
@@ -154,11 +156,10 @@ const AdminAnalytics = () => {
 
   const fetchPnLData = async () => {
     try {
-      // Fetch invoices for revenue
+      // Fetch all invoices for revenue (raised = revenue; paid = collected)
       const { data: invoices, error: invError } = await supabase
         .from("invoices")
-        .select("total_amount, status, created_at")
-        .eq("status", "paid");
+        .select("total_amount, status, created_at");
 
       if (invError) throw invError;
 
@@ -169,8 +170,9 @@ const AdminAnalytics = () => {
 
       if (expError) throw expError;
 
-      // Calculate totals
+      // Calculate totals — revenue = all invoices raised; collected = paid only
       const revenue = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
+      const collected = invoices?.filter(inv => inv.status === "paid").reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
       const cogs = expenses?.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
       const operatingExpenses = expenses?.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
       const grossProfit = revenue - cogs;
@@ -180,6 +182,7 @@ const AdminAnalytics = () => {
 
       setPnlData({
         revenue,
+        collected,
         cogs,
         grossProfit,
         operatingExpenses,
@@ -590,46 +593,47 @@ const AdminAnalytics = () => {
         <TabsContent value="pnl" className="space-y-6">
           {/* KPI Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-success/20 flex items-center justify-center">
-                  <TrendingUp className="w-6 h-6 text-success" />
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <TrendingUp className="w-5 h-5 text-success" />
                 </div>
-                <div>
-                  <p className="text-2xl font-heading font-bold text-foreground">{formatCurrency(pnlData.revenue)}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xl font-heading font-bold text-foreground leading-tight break-all">{formatCurrency(pnlData.revenue)}</p>
                   <p className="text-sm text-muted-foreground">Total Revenue</p>
+                  <p className="text-xs text-success mt-0.5">Collected: {formatCurrency(pnlData.collected)}</p>
                 </div>
               </div>
             </motion.div>
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass-card p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-warning/20 flex items-center justify-center">
-                  <DollarSign className="w-6 h-6 text-warning" />
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="glass-card p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <DollarSign className="w-5 h-5 text-warning" />
                 </div>
-                <div>
-                  <p className="text-2xl font-heading font-bold text-foreground">{formatCurrency(pnlData.grossProfit)}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xl font-heading font-bold text-foreground leading-tight break-all">{formatCurrency(pnlData.grossProfit)}</p>
                   <p className="text-sm text-muted-foreground">Gross Profit ({pnlData.grossMargin.toFixed(1)}%)</p>
                 </div>
               </div>
             </motion.div>
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass-card p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-destructive/20 flex items-center justify-center">
-                  <TrendingDown className="w-6 h-6 text-destructive" />
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="glass-card p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-destructive/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <TrendingDown className="w-5 h-5 text-destructive" />
                 </div>
-                <div>
-                  <p className="text-2xl font-heading font-bold text-foreground">{formatCurrency(pnlData.operatingExpenses)}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xl font-heading font-bold text-foreground leading-tight break-all">{formatCurrency(pnlData.operatingExpenses)}</p>
                   <p className="text-sm text-muted-foreground">Operating Expenses</p>
                 </div>
               </div>
             </motion.div>
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass-card p-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-primary/20 flex items-center justify-center">
-                  <Target className="w-6 h-6 text-primary" />
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="glass-card p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Target className="w-5 h-5 text-primary" />
                 </div>
-                <div>
-                  <p className={`text-2xl font-heading font-bold ${pnlData.netProfit >= 0 ? "text-success" : "text-destructive"}`}>
+                <div className="min-w-0 flex-1">
+                  <p className={`text-xl font-heading font-bold leading-tight break-all ${pnlData.netProfit >= 0 ? "text-success" : "text-destructive"}`}>
                     {formatCurrency(pnlData.netProfit)}
                   </p>
                   <p className="text-sm text-muted-foreground">Net Profit ({pnlData.netMargin.toFixed(1)}%)</p>
@@ -653,6 +657,10 @@ const AdminAnalytics = () => {
                   <TableRow className="border-border/50 bg-success/5">
                     <TableCell className="font-semibold text-lg">Revenue</TableCell>
                     <TableCell className="text-right font-bold text-lg text-success">{formatCurrency(pnlData.revenue)}</TableCell>
+                  </TableRow>
+                  <TableRow className="border-border/50">
+                    <TableCell className="pl-8 text-muted-foreground text-sm">Collected (Paid Invoices)</TableCell>
+                    <TableCell className="text-right text-success text-sm">{formatCurrency(pnlData.collected)}</TableCell>
                   </TableRow>
                   <TableRow className="border-border/50">
                     <TableCell className="pl-8">Less: Cost of Goods Sold (COGS)</TableCell>

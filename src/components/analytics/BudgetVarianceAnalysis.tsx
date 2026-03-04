@@ -99,18 +99,32 @@ const BudgetVarianceAnalysis = () => {
         totalActual += Number(exp.amount);
       });
 
-      // Calculate budget per category (distribute total budget proportionally or evenly)
-      const totalBudget = (target?.expense_target || 0) + (target?.cogs_target || 0);
-      const categoryCount = Object.keys(categoryTotals).length || 1;
-      const avgBudgetPerCategory = totalBudget / categoryCount;
+      // Separate COGS and non-COGS categories
+      const cogsActual = categoryTotals["cogs"] || 0;
+      const nonCogsTotal = totalActual - cogsActual;
+
+      // Non-COGS categories split expense_target proportionally by their actual spend
+      const expenseBudget = target?.expense_target || 0;
+      const cogsBudget = target?.cogs_target || 0;
+      const totalBudget = expenseBudget + cogsBudget;
 
       // Build variance data
       const varianceData: CategoryVariance[] = Object.entries(categoryTotals).map(([cat, actual]) => {
-        // For COGS category, use COGS target
-        const budgeted = cat === "cogs" ? (target?.cogs_target || avgBudgetPerCategory) : avgBudgetPerCategory;
+        let budgeted: number;
+        if (cat === "cogs") {
+          // COGS gets its own target directly
+          budgeted = cogsBudget;
+        } else if (nonCogsTotal > 0 && expenseBudget > 0) {
+          // Allocate expense_target proportionally to each category's share of non-COGS spend
+          budgeted = (actual / nonCogsTotal) * expenseBudget;
+        } else {
+          // No target set — treat budgeted = actual so variance = 0 (neutral)
+          budgeted = actual;
+        }
+
         const variance = budgeted - actual;
         const variancePercent = budgeted > 0 ? (variance / budgeted) * 100 : 0;
-        
+
         let status: "under" | "on-target" | "over" = "on-target";
         if (variancePercent < -10) status = "over";
         else if (variancePercent > 10) status = "under";

@@ -3,7 +3,8 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import {
   AreaChart,
   Area,
@@ -26,7 +27,7 @@ import {
   DollarSign,
   MapPin,
   Download,
-  Calendar,
+  CalendarRange,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -42,12 +43,11 @@ const formatCurrency = (value: number) => {
   return `₦${(value / 1000).toFixed(0)}K`;
 };
 
-// Format a Date as YYYY-MM-DD for <input type="date">
-const toDateInput = (d: Date) => format(d, "yyyy-MM-dd");
-
 const AnalyticsPage = () => {
-  const [startDate, setStartDate] = useState(() => toDateInput(subDays(new Date(), 30)));
-  const [endDate, setEndDate] = useState(() => toDateInput(new Date()));
+  const [dateRange, setDateRange] = useState<{ from: Date | null; to: Date | null }>({
+    from: subDays(new Date(), 30),
+    to: new Date(),
+  });
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const { toast } = useToast();
@@ -72,15 +72,17 @@ const AnalyticsPage = () => {
 
   useEffect(() => {
     fetchAnalyticsData();
-  }, [startDate, endDate]);
+  }, [dateRange.from, dateRange.to]);
 
   const fetchAnalyticsData = async () => {
+    if (!dateRange.from || !dateRange.to) return;
     setLoading(true);
     try {
-      const start = startOfDay(new Date(startDate + "T00:00:00"));
-      const end = endOfDay(new Date(endDate + "T00:00:00"));
-      const startISO = start.toISOString();
-      const endISO = end.toISOString();
+      const start = startOfDay(dateRange.from);
+      const end = endOfDay(dateRange.to);
+      // Use plain date strings to avoid timezone drift — same as Dispatch page
+      const startISO = format(start, "yyyy-MM-dd");
+      const endISO = format(end, "yyyy-MM-dd") + "T23:59:59";
 
       const DEFAULT_ETA_DAYS = 2;
 
@@ -98,12 +100,13 @@ const AnalyticsPage = () => {
         return daysInTransit <= (routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS);
       };
 
-      // Fetch dispatches in date range — include pickup dates and route ETA for correct OTD
+      // Fetch dispatches in date range — exclude historical (same logic as Dispatch page date filter)
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, routes:route_id(estimated_duration_hours)")
+        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, routes:route_id(estimated_duration_hours)")
         .gte("created_at", startISO)
-        .lte("created_at", endISO);
+        .lte("created_at", endISO)
+        .or("is_historical.is.null,is_historical.eq.false");
 
       // Fetch invoices in date range
       const { data: invoices } = await supabase
@@ -117,13 +120,14 @@ const AnalyticsPage = () => {
         .from("vehicles")
         .select("id, status");
 
-      // Fetch dispatches with driver info for period-specific driver performance
+      // Fetch dispatches with driver info for period-specific driver performance (exclude historical)
       const { data: driverDispatches } = await supabase
         .from("dispatches")
         .select("driver_id, status, actual_pickup, scheduled_pickup, actual_delivery, created_at, drivers:driver_id(full_name, rating, status), routes:route_id(estimated_duration_hours)")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
-        .not("driver_id", "is", null);
+        .not("driver_id", "is", null)
+        .or("is_historical.is.null,is_historical.eq.false");
 
       // Fetch expenses in period for cost calculation
       const { data: expenses } = await supabase
@@ -134,8 +138,10 @@ const AnalyticsPage = () => {
         .eq("approval_status", "approved");
 
       // Calculate KPIs
-      const deliveredDispatches = dispatches?.filter(d => d.status === "delivered") || [];
-      const totalDeliveries = deliveredDispatches.length;
+      const allDispatches = dispatches || [];
+      const deliveredDispatches = allDispatches.filter(d => d.status === "delivered");
+      // Total deliveries = all dispatches created in the period (not just completed ones)
+      const totalDeliveries = allDispatches.length;
 
       // OTD: average actual transit days vs average route target days
       const DEFAULT_ETA_DAYS_KPI = 2;
@@ -158,7 +164,7 @@ const AnalyticsPage = () => {
 
       const revenueMtd = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0) || 0;
 
-      const totalDistance = deliveredDispatches.reduce((sum, d) => sum + Number(d.distance_km || 0), 0);
+      const totalDistance = allDispatches.reduce((sum, d) => sum + Number(d.distance_km || 0), 0);
       const avgDistance = totalDeliveries > 0 ? totalDistance / totalDeliveries : 0;
 
       setKpis({ totalDeliveries, avgTransitDays, avgTargetDays, revenueMtd, avgDistance });
@@ -351,7 +357,7 @@ const AnalyticsPage = () => {
       // Date range
       doc.setFontSize(10);
       doc.setTextColor(100);
-      doc.text(`Date Range: ${startDate} to ${endDate}`, pageWidth / 2, 28, { align: "center" });
+      doc.text(`Date Range: ${dateRange.from ? format(dateRange.from, "MMM d, yyyy") : ""} to ${dateRange.to ? format(dateRange.to, "MMM d, yyyy") : ""}`, pageWidth / 2, 28, { align: "center" });
       doc.text(`Generated: ${new Date().toLocaleDateString()}`, pageWidth / 2, 34, { align: "center" });
 
       // KPIs
@@ -404,7 +410,7 @@ const AnalyticsPage = () => {
         });
       }
 
-      doc.save(`analytics-report-${startDate}-to-${endDate}.pdf`);
+      doc.save(`analytics-report-${dateRange.from ? format(dateRange.from, "yyyy-MM-dd") : "start"}-to-${dateRange.to ? format(dateRange.to, "yyyy-MM-dd") : "end"}.pdf`);
       toast({
         title: "Report Downloaded",
         description: "Analytics report has been saved as PDF",
@@ -438,25 +444,44 @@ const AnalyticsPage = () => {
     >
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
-        <div className="flex flex-wrap items-center gap-2">
-          <Calendar className="w-4 h-4 text-muted-foreground" />
-          <Input
-            type="date"
-            value={startDate}
-            max={endDate}
-            onChange={e => setStartDate(e.target.value)}
-            className="w-40 bg-secondary/50 border-border/50 text-sm"
-          />
-          <span className="text-muted-foreground text-sm">to</span>
-          <Input
-            type="date"
-            value={endDate}
-            min={startDate}
-            max={toDateInput(new Date())}
-            onChange={e => setEndDate(e.target.value)}
-            className="w-40 bg-secondary/50 border-border/50 text-sm"
-          />
-        </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-auto bg-secondary/50 border-border/50">
+              <CalendarRange className="w-4 h-4 mr-2" />
+              {dateRange.from ? (
+                dateRange.to ? (
+                  <>{format(dateRange.from, "MMM d")} – {format(dateRange.to, "MMM d, yyyy")}</>
+                ) : (
+                  format(dateRange.from, "MMM d, yyyy")
+                )
+              ) : (
+                "Date Range"
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <CalendarComponent
+              initialFocus
+              mode="range"
+              defaultMonth={dateRange.from || new Date()}
+              selected={{ from: dateRange.from || undefined, to: dateRange.to || undefined }}
+              onSelect={(range) => setDateRange({ from: range?.from || null, to: range?.to || null })}
+              numberOfMonths={2}
+            />
+            {(dateRange.from || dateRange.to) && (
+              <div className="p-2 border-t">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setDateRange({ from: subDays(new Date(), 30), to: new Date() })}
+                >
+                  Reset to Last 30 Days
+                </Button>
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
         <Button variant="outline" onClick={handleExportReport} disabled={exporting}>
           <Download className="w-4 h-4 mr-2" />
           {exporting ? "Exporting..." : "Export Report"}
@@ -470,11 +495,10 @@ const AnalyticsPage = () => {
             title: "Total Deliveries",
             value: kpis.totalDeliveries.toString(),
             change: (() => {
-              const s = new Date(startDate + "T00:00:00");
-              const e = new Date(endDate + "T00:00:00");
-              const sLabel = format(s, "MMM yyyy");
-              const eLabel = format(e, "MMM yyyy");
-              return sLabel === eLabel ? sLabel : `${format(s, "MMM")} – ${format(e, "MMM yyyy")}`;
+              if (!dateRange.from || !dateRange.to) return "Select date range";
+              const sLabel = format(dateRange.from, "MMM yyyy");
+              const eLabel = format(dateRange.to, "MMM yyyy");
+              return sLabel === eLabel ? sLabel : `${format(dateRange.from, "MMM")} – ${format(dateRange.to, "MMM yyyy")}`;
             })(),
             positive: true,
             icon: Truck,

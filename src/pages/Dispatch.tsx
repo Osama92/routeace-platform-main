@@ -595,10 +595,15 @@ const DispatchPage = () => {
       (sourceFilter === "historical" && dispatch.is_historical === true) ||
       (sourceFilter === "regular" && !dispatch.is_historical);
 
-    // Date range filter
+    // Date range filter — always use created_at so it matches Analytics page
     let matchesDateRange = true;
     if (dateRange.from || dateRange.to) {
-      const dispatchDate = new Date(dispatch.actual_delivery || dispatch.created_at);
+      // Exclude dispatches with no created_at — they have no date to compare
+      if (!dispatch.created_at) return false;
+      // When a date filter is active, exclude historical dispatches (they use import dates,
+      // not real operation dates, so they skew the count)
+      if (dispatch.is_historical) return false;
+      const dispatchDate = new Date(dispatch.created_at);
       if (dateRange.from && dispatchDate < dateRange.from) {
         matchesDateRange = false;
       }
@@ -1729,6 +1734,23 @@ const DispatchPage = () => {
           </Dialog>
         )}
       </div>
+
+      {/* Dispatch count summary */}
+      {!loading && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
+          <span className="font-medium text-foreground">{filteredDispatches.length}</span>
+          <span>
+            {filteredDispatches.length === 1 ? "dispatch" : "dispatches"}
+            {(dateRange.from || dateRange.to) && (
+              <> in {dateRange.from ? format(dateRange.from, "MMM d") : ""}
+              {dateRange.from && dateRange.to ? " – " : ""}
+              {dateRange.to ? format(dateRange.to, "MMM d, yyyy") : ""}</>
+            )}
+            {statusFilter !== "all" && <> · {statusFilter}</>}
+            {sourceFilter !== "all" && !(dateRange.from || dateRange.to) && <> · {sourceFilter}</>}
+          </span>
+        </div>
+      )}
 
       {/* Dispatch Cards Grid */}
       {loading ? (
