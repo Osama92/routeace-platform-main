@@ -117,18 +117,17 @@ const VendorPerformance = () => {
     try {
       const { start, end } = getDateRange();
 
-      // Fetch all vendors
+      // Fetch all vendors regardless of partner_type (transporter, 3pl, 3pl_vendor, etc.)
       const { data: partnersData, error: partnersError } = await supabase
         .from("partners")
-        .select("id, company_name")
-        .in("partner_type", ["transporter", "3pl"])
-        .eq("approval_status", "approved");
+        .select("id, company_name, partner_type");
 
       if (partnersError) throw partnersError;
 
       const DEFAULT_ETA_DAYS = 2;
 
-      // Fetch dispatches with vendor-linked drivers — include pickup dates and route ETA for correct OTD
+      // Fetch dispatches — join both vehicles and drivers for partner_id lookup
+      // Vehicles are more reliably linked to a partner than drivers in this schema
       const { data: dispatchesData, error: dispatchesError } = await supabase
         .from("dispatches")
         .select(`
@@ -140,25 +139,25 @@ const VendorPerformance = () => {
           created_at,
           cost,
           driver_id,
-          drivers!inner(partner_id),
+          vehicle_id,
+          vehicles(partner_id),
+          drivers(partner_id),
           routes:route_id(estimated_duration_hours)
         `)
         .gte("created_at", start.toISOString())
         .lte("created_at", end.toISOString());
 
-      // Fetch invoices for revenue
-      const { data: invoicesData, error: invoicesError } = await supabase
-        .from("invoices")
-        .select("dispatch_id, total_amount")
-        .gte("created_at", start.toISOString())
-        .lte("created_at", end.toISOString());
+      // Fetch invoices for revenue — get all invoices that link to dispatches in the period
+      // (no date filter on invoices: they may be created later than the dispatch)
+      const dispatchIds = (dispatchesData || []).map((d: any) => d.id).filter(Boolean);
+      const { data: invoicesData } = dispatchIds.length > 0
+        ? await supabase.from("invoices").select("dispatch_id, total_amount").in("dispatch_id", dispatchIds)
+        : { data: [] };
 
-      // Fetch SLA breaches
-      const { data: breachesData, error: breachesError } = await supabase
-        .from("sla_breach_alerts")
-        .select("dispatch_id")
-        .gte("created_at", start.toISOString())
-        .lte("created_at", end.toISOString());
+      // Fetch SLA breaches for dispatches in the period
+      const { data: breachesData } = dispatchIds.length > 0
+        ? await supabase.from("sla_breach_alerts").select("dispatch_id").in("dispatch_id", dispatchIds)
+        : { data: [] };
 
       // Create invoice lookup
       const invoiceLookup: Record<string, number> = {};
@@ -192,7 +191,14 @@ const VendorPerformance = () => {
       });
 
       dispatchesData?.forEach((dispatch: any) => {
-        const partnerId = dispatch.drivers?.partner_id;
+        // Resolve partner: prefer vehicle.partner_id (most reliably set), fall back to driver.partner_id
+        const vehiclePartnerId = Array.isArray(dispatch.vehicles)
+          ? dispatch.vehicles[0]?.partner_id
+          : dispatch.vehicles?.partner_id;
+        const driverPartnerId = Array.isArray(dispatch.drivers)
+          ? dispatch.drivers[0]?.partner_id
+          : dispatch.drivers?.partner_id;
+        const partnerId = vehiclePartnerId || driverPartnerId;
         if (!partnerId || !metricsMap[partnerId]) return;
 
         const vendor = metricsMap[partnerId];
@@ -261,9 +267,8 @@ const VendorPerformance = () => {
         );
       });
 
-      // Sort by performance score
+      // Sort by performance score (show all partners, even those with 0 trips)
       const sortedVendors = Object.values(metricsMap)
-        .filter((v) => v.totalTrips > 0)
         .sort((a, b) => b.performanceScore - a.performanceScore);
 
       setVendors(sortedVendors);
@@ -286,6 +291,8 @@ const VendorPerformance = () => {
     "On-Time Rate": v.onTimeRate,
     "Performance Score": v.performanceScore,
     Trips: v.completedTrips,
+    // Revenue in thousands for chart readability
+    "Revenue (₦k)": Math.round(v.totalRevenue / 1000),
   }));
 
   const totals = vendors.reduce(
@@ -415,25 +422,43 @@ const VendorPerformance = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData} margin={{ left: 0, right: 20 }}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                      <XAxis 
-                        dataKey="name" 
-                        tick={{ fontSize: 11 }}
-                        angle={-45}
-                        textAnchor="end"
-                        height={80}
-                      />
-                      <YAxis />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="On-Time Rate" fill="hsl(var(--primary))" />
-                      <Bar dataKey="Performance Score" fill="hsl(var(--success))" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                {vendors.length === 0 && !loading ? (
+                  <div className="h-80 flex items-center justify-center text-center text-muted-foreground text-sm px-8">
+                    No partner data for this period. Ensure each vehicle used in dispatches has a Partner assigned (Fleet → edit vehicle → Partner field), or each driver has a Partner set.
+                  </div>
+                ) : (
+                  <div className="h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData} margin={{ left: 0, right: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                        <XAxis
+                          dataKey="name"
+                          tick={{ fontSize: 11 }}
+                          angle={-45}
+                          textAnchor="end"
+                          height={80}
+                        />
+                        <YAxis yAxisId="left" />
+                        {!hideFinancialData && (
+                          <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `₦${v}k`} />
+                        )}
+                        <Tooltip
+                          formatter={(value, name) =>
+                            name === "Revenue (₦k)"
+                              ? [`₦${Number(value).toLocaleString()}k`, "Revenue"]
+                              : [value, name]
+                          }
+                        />
+                        <Legend />
+                        <Bar yAxisId="left" dataKey="On-Time Rate" fill="hsl(var(--primary))" />
+                        <Bar yAxisId="left" dataKey="Performance Score" fill="hsl(var(--success))" />
+                        {!hideFinancialData && (
+                          <Bar yAxisId="right" dataKey="Revenue (₦k)" fill="hsl(var(--warning))" />
+                        )}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
               </CardContent>
             </Card>
 

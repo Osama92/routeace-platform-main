@@ -54,7 +54,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { format, differenceInMinutes, addHours } from "date-fns";
+import { format } from "date-fns";
 
 interface Dispatch {
   id: string;
@@ -92,6 +92,12 @@ interface EmailNotification {
 
 const SLA_HOURS = 2; // 2 hours SLA for customer notifications
 
+const EMAIL_MONTHS = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December"
+];
+const EMAIL_YEARS = Array.from({ length: 3 }, (_, i) => new Date().getFullYear() - i);
+
 const EmailNotificationsPage = () => {
   const [dispatches, setDispatches] = useState<Dispatch[]>([]);
   const [emailNotifications, setEmailNotifications] = useState<EmailNotification[]>([]);
@@ -102,6 +108,8 @@ const EmailNotificationsPage = () => {
   const [selectedEmail, setSelectedEmail] = useState<EmailNotification | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const { toast } = useToast();
   const { user, hasAnyRole } = useAuth();
 
@@ -305,24 +313,30 @@ const EmailNotificationsPage = () => {
     }
   };
 
-  const filteredNotifications = emailNotifications.filter(notification => {
-    const matchesSearch = 
+  // Period-filtered notifications (month/year)
+  const periodNotifications = emailNotifications.filter(n => {
+    const d = new Date(n.created_at);
+    return d.getMonth() + 1 === selectedMonth && d.getFullYear() === selectedYear;
+  });
+
+  const filteredNotifications = periodNotifications.filter(notification => {
+    const matchesSearch =
       notification.recipient_email.toLowerCase().includes(searchQuery.toLowerCase()) ||
       notification.subject.toLowerCase().includes(searchQuery.toLowerCase()) ||
       notification.dispatches?.dispatch_number?.toLowerCase().includes(searchQuery.toLowerCase());
-    
+
     const matchesStatus = statusFilter === "all" || notification.status === statusFilter;
-    
+
     return matchesSearch && matchesStatus;
   });
 
   const slaStats = {
-    total: emailNotifications.length,
-    sent: emailNotifications.filter(e => e.status === "sent").length,
-    pending: emailNotifications.filter(e => e.status === "pending").length,
-    failed: emailNotifications.filter(e => e.status === "failed").length,
-    slaMet: emailNotifications.filter(e => e.sla_met === true).length,
-    slaBreached: emailNotifications.filter(e => e.sla_met === false).length,
+    total: periodNotifications.length,
+    sent: periodNotifications.filter(e => e.status === "sent").length,
+    pending: periodNotifications.filter(e => e.status === "pending").length,
+    failed: periodNotifications.filter(e => e.status === "failed").length,
+    slaMet: periodNotifications.filter(e => e.sla_met === true).length,
+    slaBreached: periodNotifications.filter(e => e.sla_met === false).length,
   };
 
   const getSlaStatus = (notification: EmailNotification) => {
@@ -449,7 +463,28 @@ const EmailNotificationsPage = () => {
         <Card className="glass-card">
           <CardContent className="p-4">
             <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
-              <div className="flex flex-1 gap-4 w-full md:w-auto">
+              <div className="flex flex-1 gap-3 w-full md:w-auto flex-wrap">
+                {/* Period Selector */}
+                <Select value={String(selectedMonth)} onValueChange={(v) => setSelectedMonth(Number(v))}>
+                  <SelectTrigger className="w-44 bg-secondary/50">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {EMAIL_MONTHS.map((m, i) => (
+                      <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
+                  <SelectTrigger className="w-28 bg-secondary/50">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {EMAIL_YEARS.map((y) => (
+                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <div className="relative flex-1 md:max-w-sm">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
@@ -572,14 +607,15 @@ const EmailNotificationsPage = () => {
                           </TableCell>
                           <TableCell>
                             <Button
-                              variant="ghost"
+                              variant="outline"
                               size="sm"
                               onClick={() => {
                                 setSelectedEmail(notification);
                                 setViewDialogOpen(true);
                               }}
                             >
-                              <Eye className="w-4 h-4" />
+                              <Eye className="w-4 h-4 mr-1" />
+                              View
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -680,7 +716,7 @@ const EmailNotificationsPage = () => {
 
       {/* View Email Dialog */}
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Email Details</DialogTitle>
             <DialogDescription>

@@ -111,6 +111,11 @@ interface Driver {
   full_name: string;
 }
 
+interface Customer {
+  id: string;
+  company_name: string;
+}
+
 const expenseCategories = [
   { value: "cogs", label: "Cost of Goods Sold", icon: Package, color: "text-emerald-600" },
   { value: "fuel", label: "Fuel", icon: Fuel, color: "text-orange-500" },
@@ -132,11 +137,19 @@ const expenseCategories = [
   { value: "other", label: "Other", icon: CircleDollarSign, color: "text-muted-foreground" },
 ];
 
+const currentDate = new Date();
+const MONTHS = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December"
+];
+const YEARS = Array.from({ length: 5 }, (_, i) => currentDate.getFullYear() - i);
+
 const Expenses = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [vendors, setVendors] = useState<Partner[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [syncingBankAccounts, setSyncingBankAccounts] = useState(false);
   const [manageBankOpen, setManageBankOpen] = useState(false);
@@ -145,6 +158,8 @@ const Expenses = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [cogsFilter, setCogsFilter] = useState("all");
+  const [selectedMonth, setSelectedMonth] = useState<number>(currentDate.getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number>(currentDate.getFullYear());
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -163,6 +178,7 @@ const Expenses = () => {
     vendor_id: "",
     vehicle_id: "",
     driver_id: "",
+    customer_id: "",
     payment_account_id: "",
     notes: "",
     is_recurring: false,
@@ -178,12 +194,13 @@ const Expenses = () => {
 
   const fetchData = async () => {
     try {
-      const [expensesRes, vendorsRes, vehiclesRes, driversRes, bankAccountsRes] = await Promise.all([
+      const [expensesRes, vendorsRes, vehiclesRes, driversRes, bankAccountsRes, customersRes] = await Promise.all([
         supabase.from("expenses").select("*").order("expense_date", { ascending: false }),
         supabase.from("partners").select("id, company_name"),
         supabase.from("vehicles").select("id, registration_number"),
         supabase.from("drivers").select("id, full_name"),
         (supabase as any).from("bank_accounts").select("id, name, account_type, account_number").order("name"),
+        supabase.from("customers").select("id, company_name").order("company_name"),
       ]);
 
       if (expensesRes.error) throw expensesRes.error;
@@ -192,6 +209,7 @@ const Expenses = () => {
       setVehicles(vehiclesRes.data || []);
       setDrivers(driversRes.data || []);
       setBankAccounts(bankAccountsRes.data || []);
+      setCustomers((customersRes.data as Customer[]) || []);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -295,6 +313,7 @@ const Expenses = () => {
         vendor_id: formData.vendor_id || null,
         vehicle_id: formData.vehicle_id || null,
         driver_id: formData.driver_id || null,
+        customer_id: (formData.customer_id && formData.customer_id !== "none") ? formData.customer_id : null,
         notes: formData.notes || null,
         is_recurring: formData.is_recurring,
         is_cogs: formData.is_cogs,
@@ -346,6 +365,7 @@ const Expenses = () => {
       vendor_id: "",
       vehicle_id: "",
       driver_id: "",
+      customer_id: "",
       payment_account_id: "",
       notes: "",
       is_recurring: false,
@@ -460,26 +480,24 @@ const Expenses = () => {
     }
   };
 
-  const filteredExpenses = expenses.filter((expense) => {
+  // Period-filtered expenses (for KPI cards)
+  const periodExpenses = expenses.filter((exp) => {
+    const d = new Date(exp.expense_date);
+    return d.getMonth() + 1 === selectedMonth && d.getFullYear() === selectedYear;
+  });
+
+  const filteredExpenses = periodExpenses.filter((expense) => {
     const matchesSearch = expense.description.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = categoryFilter === "all" || expense.category === categoryFilter;
-    const matchesCogs = cogsFilter === "all" || 
-      (cogsFilter === "cogs" && expense.is_cogs) || 
+    const matchesCogs = cogsFilter === "all" ||
+      (cogsFilter === "cogs" && expense.is_cogs) ||
       (cogsFilter === "opex" && !expense.is_cogs);
     return matchesSearch && matchesCategory && matchesCogs;
   });
 
-  const totalExpenses = expenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
-  const cogsTotal = expenses.filter(exp => exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
-  const opexTotal = expenses.filter(exp => !exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
-  
-  const thisMonthExpenses = expenses
-    .filter((exp) => {
-      const expDate = new Date(exp.expense_date);
-      const now = new Date();
-      return expDate.getMonth() === now.getMonth() && expDate.getFullYear() === now.getFullYear();
-    })
-    .reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const totalExpenses = periodExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const cogsTotal = periodExpenses.filter(exp => exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const opexTotal = periodExpenses.filter(exp => !exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
 
   const getCategoryInfo = (category: string) => {
     return expenseCategories.find((c) => c.value === category) || expenseCategories[expenseCategories.length - 1];
@@ -498,8 +516,34 @@ const Expenses = () => {
       title="Expenses"
       subtitle="Track and manage all business expenses"
     >
+      {/* Period Selector */}
+      <div className="flex items-center gap-3 mb-6">
+        <Calendar className="w-4 h-4 text-muted-foreground" />
+        <span className="text-sm text-muted-foreground">Viewing period:</span>
+        <Select value={String(selectedMonth)} onValueChange={(v) => setSelectedMonth(Number(v))}>
+          <SelectTrigger className="w-36 bg-secondary/50 border-border/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {MONTHS.map((m, i) => (
+              <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
+          <SelectTrigger className="w-24 bg-secondary/50 border-border/50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {YEARS.map((y) => (
+              <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -547,25 +591,11 @@ const Expenses = () => {
           transition={{ delay: 0.3 }}
           className="glass-card p-4"
         >
-          <div className="w-10 h-10 rounded-xl bg-info/20 flex items-center justify-center mb-3">
-            <Calendar className="w-5 h-5 text-info" />
-          </div>
-          <p className="text-lg font-heading font-bold text-foreground leading-tight break-all">
-            {formatCurrency(thisMonthExpenses)}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">This Month</p>
-        </motion.div>
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="glass-card p-4"
-        >
           <div className="w-10 h-10 rounded-xl bg-success/20 flex items-center justify-center mb-3">
             <FileText className="w-5 h-5 text-success" />
           </div>
-          <p className="text-lg font-heading font-bold text-foreground leading-tight">{expenses.length}</p>
-          <p className="text-xs text-muted-foreground mt-1">Total Records</p>
+          <p className="text-lg font-heading font-bold text-foreground leading-tight">{periodExpenses.length}</p>
+          <p className="text-xs text-muted-foreground mt-1">Records This Period</p>
         </motion.div>
       </div>
 
@@ -800,6 +830,26 @@ const Expenses = () => {
                         {drivers.map((driver) => (
                           <SelectItem key={driver.id} value={driver.id}>
                             {driver.full_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="customer_id">Customer <span className="text-muted-foreground font-normal">(optional — for analytics reporting)</span></Label>
+                    <Select
+                      value={formData.customer_id}
+                      onValueChange={(value) => setFormData((prev) => ({ ...prev, customer_id: value }))}
+                    >
+                      <SelectTrigger className="bg-secondary/50">
+                        <SelectValue placeholder="Link to customer (if applicable)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {customers.map((customer) => (
+                          <SelectItem key={customer.id} value={customer.id}>
+                            {customer.company_name}
                           </SelectItem>
                         ))}
                       </SelectContent>
