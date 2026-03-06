@@ -190,7 +190,7 @@ const Expenses = () => {
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<string>("");
 
-  const canManage = hasAnyRole(["admin", "operations"]);
+  const canManage = hasAnyRole(["admin", "operations", "support", "dispatcher"]);
 
   const fetchData = async () => {
     try {
