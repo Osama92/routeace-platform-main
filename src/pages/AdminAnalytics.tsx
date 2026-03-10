@@ -165,12 +165,13 @@ const AdminAnalytics = () => {
       const lastDay = new Date(pnlYear, pnlMonth, 0).getDate();
       const periodEnd = `${pnlYear}-${String(pnlMonth).padStart(2, '0')}-${lastDay}T23:59:59`;
 
-      // Fetch invoices for selected month
+      // Fetch invoices for selected month — use invoice_date so invoices are attributed
+      // to the month they were issued, not the month they were created in the system
       const { data: invoices, error: invError } = await supabase
         .from("invoices")
-        .select("total_amount, status, created_at")
-        .gte("created_at", periodStart)
-        .lte("created_at", periodEnd);
+        .select("total_amount, status, invoice_date")
+        .gte("invoice_date", periodStart.split("T")[0])
+        .lte("invoice_date", periodEnd.split("T")[0]);
 
       if (invError) throw invError;
 
@@ -208,7 +209,7 @@ const AdminAnalytics = () => {
       const monthlyData: Record<string, any> = {};
       
       invoices?.forEach(inv => {
-        const date = new Date(inv.created_at);
+        const date = new Date(inv.invoice_date);
         const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
         if (!monthlyData[key]) {
           monthlyData[key] = { month: key, revenue: 0, cogs: 0, opex: 0, profit: 0 };
