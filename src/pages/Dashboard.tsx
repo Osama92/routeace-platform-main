@@ -57,29 +57,28 @@ const Dashboard = () => {
         .select("id", { count: "exact", head: true })
         .not("status", "in", "(delivered,cancelled)");
 
-      // Revenue MTD - First try historical_invoice_data (transactions), then fall back to invoices
+      // Revenue MTD — use invoice_date for consistent attribution across all screens
       let revenueMtd = 0;
       let totalCostMtd = 0;
 
-      // Try historical_invoice_data first (more comprehensive)
-      const { data: transactions } = await supabase
-        .from("historical_invoice_data")
-        .select("total_revenue, total_cost, total_vendor_cost")
-        .eq("period_year", currentYear)
-        .eq("period_month", currentMonth);
+      const mtdStart = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+      const mtdEnd = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${new Date(currentYear, currentMonth, 0).getDate()}`;
 
-      if (transactions && transactions.length > 0) {
-        revenueMtd = transactions.reduce((sum, t: any) => sum + Number(t.total_revenue || 0), 0);
-        totalCostMtd = transactions.reduce((sum, t: any) =>
-          sum + Number(t.total_cost || 0) + Number(t.total_vendor_cost || 0), 0);
-      } else {
-        // Fall back to invoices if no transaction data
-        const { data: invoices } = await supabase
-          .from("invoices")
-          .select("total_amount")
-          .gte("created_at", start);
-        revenueMtd = (invoices || []).reduce((sum, r: any) => sum + Number(r.total_amount || 0), 0);
-      }
+      const { data: invoices } = await supabase
+        .from("invoices")
+        .select("total_amount")
+        .gte("invoice_date", mtdStart)
+        .lte("invoice_date", mtdEnd);
+      revenueMtd = (invoices || []).reduce((sum, r: any) => sum + Number(r.total_amount || 0), 0);
+
+      // Costs from approved expenses MTD
+      const { data: expensesMtd } = await supabase
+        .from("expenses")
+        .select("amount")
+        .gte("expense_date", mtdStart)
+        .lte("expense_date", mtdEnd)
+        .eq("approval_status", "approved");
+      totalCostMtd = (expensesMtd || []).reduce((sum, e: any) => sum + Number(e.amount || 0), 0);
 
       // Distance MTD — sum of total_distance_km (To & Fro) for ALL dispatches
       // created this month (regardless of status), excluding historical imports.
@@ -98,7 +97,7 @@ const Dashboard = () => {
       }, 0);
 
       // If no dispatch distance data, try historical_invoice_data as fallback
-      if (totalDistanceKm === 0 && transactions && transactions.length > 0) {
+      if (totalDistanceKm === 0) {
         const { data: transactionsWithDistance } = await supabase
           .from("historical_invoice_data")
           .select("km_covered")
