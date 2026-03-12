@@ -45,6 +45,7 @@ import {
   CheckCircle,
   XCircle,
   Save,
+  AlertTriangle,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -407,6 +408,9 @@ const DispatchPage = () => {
     selectedDropoffId: "", // For updating specific dropoff
   });
   const [statusDropoffs, setStatusDropoffs] = useState<DispatchDropoff[]>([]);
+  const [editingDelayReason, setEditingDelayReason] = useState(false);
+  const [delayReasonEdit, setDelayReasonEdit] = useState("");
+  const [savingDelayReason, setSavingDelayReason] = useState(false);
 
   const [dropoffs, setDropoffs] = useState<Dropoff[]>([]);
 
@@ -910,6 +914,26 @@ const DispatchPage = () => {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveDelayReason = async () => {
+    if (!selectedDispatch) return;
+    setSavingDelayReason(true);
+    try {
+      const { error } = await supabase
+        .from("dispatches")
+        .update({ delay_reason: delayReasonEdit === "none" ? null : delayReasonEdit })
+        .eq("id", selectedDispatch.id);
+      if (error) throw error;
+      setSelectedDispatch({ ...selectedDispatch, delay_reason: delayReasonEdit === "none" ? null : delayReasonEdit } as any);
+      setEditingDelayReason(false);
+      fetchData();
+      toast({ title: "Saved", description: "Delay reason updated successfully" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSavingDelayReason(false);
     }
   };
 
@@ -1965,6 +1989,27 @@ const DispatchPage = () => {
                 </div>
               </div>
 
+              {/* Late delivery — missing delay reason prompt */}
+              {(() => {
+                if ((dispatch as any).status !== "delivered") return null;
+                const startDate = (dispatch as any).actual_pickup || (dispatch as any).scheduled_pickup || dispatch.created_at;
+                const endDate = (dispatch as any).actual_delivery;
+                if (!startDate || !endDate) return null;
+                const days = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24));
+                const eta = (dispatch as any).routes?.estimated_duration_hours ?? 2;
+                const isLate = days > eta;
+                const hasReason = !!(dispatch as any).delay_reason;
+                if (!isLate) return null;
+                return (
+                  <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium mb-2 ${hasReason ? "bg-success/10 text-success" : "bg-warning/10 text-warning border border-warning/30"}`}>
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                    {hasReason
+                      ? `Delay reason recorded: ${(dispatch as any).delay_reason.replace(/_/g, " ")}`
+                      : "Late delivery — delay reason not recorded. Click View to add."}
+                  </div>
+                );
+              })()}
+
               {/* Action Buttons */}
               <div className="flex flex-wrap gap-2 mt-4">
                 <Button
@@ -2459,6 +2504,71 @@ const DispatchPage = () => {
                       );
                     })()}
                   </div>
+
+                  {/* Delay Reason — shown for delivered dispatches */}
+                  {selectedDispatch.status === "delivered" && (
+                    <div className={`p-3 rounded-lg border ${(selectedDispatch as any).delay_reason ? "border-warning/30 bg-warning/5" : "border-border/50 bg-secondary/30"}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-warning" />
+                          Delay Reason
+                        </p>
+                        {canManage && !editingDelayReason && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => {
+                              setDelayReasonEdit((selectedDispatch as any).delay_reason || "none");
+                              setEditingDelayReason(true);
+                            }}
+                          >
+                            <Pencil className="w-3 h-3 mr-1" />
+                            {(selectedDispatch as any).delay_reason ? "Edit" : "Record"}
+                          </Button>
+                        )}
+                      </div>
+                      {editingDelayReason ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={delayReasonEdit || "none"}
+                            onValueChange={setDelayReasonEdit}
+                          >
+                            <SelectTrigger className="bg-secondary/50 h-8 text-sm">
+                              <SelectValue placeholder="Select reason" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">No delay / On time</SelectItem>
+                              <SelectItem value="traffic">Traffic congestion</SelectItem>
+                              <SelectItem value="vehicle_breakdown">Vehicle breakdown</SelectItem>
+                              <SelectItem value="bad_road">Bad road condition</SelectItem>
+                              <SelectItem value="customer_unavailable">Customer unavailable</SelectItem>
+                              <SelectItem value="wrong_address">Wrong / incomplete address</SelectItem>
+                              <SelectItem value="weather">Weather conditions</SelectItem>
+                              <SelectItem value="security">Security / roadblock</SelectItem>
+                              <SelectItem value="loading_delay">Loading / offloading delay</SelectItem>
+                              <SelectItem value="driver_issue">Driver issue</SelectItem>
+                              <SelectItem value="other">Other (see notes)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <div className="flex gap-2">
+                            <Button size="sm" className="h-7 text-xs" onClick={handleSaveDelayReason} disabled={savingDelayReason}>
+                              {savingDelayReason ? "Saving..." : "Save"}
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingDelayReason(false)}>
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className={`text-sm ${(selectedDispatch as any).delay_reason ? "text-warning font-medium" : "text-muted-foreground italic"}`}>
+                          {(selectedDispatch as any).delay_reason
+                            ? (selectedDispatch as any).delay_reason.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
+                            : "Not recorded"}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Route Map View */}
                   <DispatchMapView
