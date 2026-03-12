@@ -755,12 +755,12 @@ const AdminAnalytics = () => {
 
         {/* Customer Profitability Tab */}
         <TabsContent value="profitability" className="space-y-6">
-          <CustomerProfitabilityReport />
+          <CustomerProfitabilityReport month={pnlMonth} year={pnlYear} />
         </TabsContent>
 
         {/* Budget Variance Tab */}
         <TabsContent value="variance" className="space-y-6">
-          <BudgetVarianceAnalysis />
+          <BudgetVarianceAnalysis month={pnlMonth} year={pnlYear} />
         </TabsContent>
 
         {/* Financial Targets Tab */}

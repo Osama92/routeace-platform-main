@@ -67,6 +67,7 @@ const AnalyticsPage = () => {
   const [deliveryData, setDeliveryData] = useState<any[]>([]);
   const [revenueData, setRevenueData] = useState<any[]>([]);
   const [fleetUtilization, setFleetUtilization] = useState<any[]>([]);
+  const [delayReasons, setDelayReasons] = useState<{ reason: string; count: number }[]>([]);
   const [topRoutes, setTopRoutes] = useState<any[]>([]);
   const [driverPerformance, setDriverPerformance] = useState<any[]>([]);
 
@@ -103,17 +104,17 @@ const AnalyticsPage = () => {
       // Fetch dispatches in date range — exclude historical (same logic as Dispatch page date filter)
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, routes:route_id(estimated_duration_hours)")
+        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, delay_reason, routes:route_id(estimated_duration_hours)")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
         .or("is_historical.is.null,is_historical.eq.false");
 
-      // Fetch invoices in date range
+      // Fetch invoices in date range using invoice_date (consistent with P&L and Admin Analytics)
       const { data: invoices } = await supabase
         .from("invoices")
-        .select("total_amount, created_at")
-        .gte("created_at", startISO)
-        .lte("created_at", endISO);
+        .select("total_amount, invoice_date")
+        .gte("invoice_date", startISO)
+        .lte("invoice_date", format(end, "yyyy-MM-dd"));
 
       // Fetch vehicles for fleet utilization (current snapshot is fine — status is live)
       const { data: vehicles } = await supabase
@@ -222,6 +223,31 @@ const AnalyticsPage = () => {
         { name: "Maintenance", value: Math.round((statusCounts.maintenance / totalVehicles) * 100), color: "hsl(199, 89%, 48%)" },
         { name: "Inactive", value: Math.round((statusCounts.inactive / totalVehicles) * 100), color: "hsl(222, 30%, 18%)" },
       ]);
+
+      // Delay reasons breakdown — from delivered dispatches that have a delay_reason set
+      const delayReasonLabels: Record<string, string> = {
+        traffic: "Traffic congestion",
+        vehicle_breakdown: "Vehicle breakdown",
+        bad_road: "Bad road condition",
+        customer_unavailable: "Customer unavailable",
+        wrong_address: "Wrong address",
+        weather: "Weather",
+        security: "Security / roadblock",
+        loading_delay: "Loading delay",
+        driver_issue: "Driver issue",
+        other: "Other",
+      };
+      const reasonMap: Record<string, number> = {};
+      dispatches?.forEach((d: any) => {
+        if (d.delay_reason && d.delay_reason !== "none") {
+          const label = delayReasonLabels[d.delay_reason] || d.delay_reason;
+          reasonMap[label] = (reasonMap[label] || 0) + 1;
+        }
+      });
+      const delayReasonData = Object.entries(reasonMap)
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count);
+      setDelayReasons(delayReasonData);
 
       // Top routes by frequency
       const routeMap = new Map<string, { trips: number; distance: number; revenue: number }>();
@@ -680,6 +706,46 @@ const AnalyticsPage = () => {
               </div>
             ))}
           </div>
+        </motion.div>
+
+        {/* Delay Reasons */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.3 }}
+          className="glass-card p-6"
+        >
+          <h3 className="font-heading font-semibold text-lg text-foreground mb-1">
+            Delivery Delay Reasons
+          </h3>
+          <p className="text-xs text-muted-foreground mb-4">From delayed deliveries in selected period</p>
+          {delayReasons.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
+              <Clock className="w-8 h-8 mb-2 opacity-30" />
+              <p className="text-sm">No delays recorded in this period</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {delayReasons.map((item, index) => {
+                const maxCount = delayReasons[0].count;
+                const pct = Math.round((item.count / maxCount) * 100);
+                return (
+                  <div key={index} className="space-y-1">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-foreground">{item.reason}</span>
+                      <span className="font-semibold text-warning">{item.count} trip{item.count > 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-warning rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </motion.div>
       </div>
 

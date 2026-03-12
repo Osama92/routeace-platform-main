@@ -403,6 +403,7 @@ const DispatchPage = () => {
     status: "",
     location: "",
     notes: "",
+    delay_reason: "",
     selectedDropoffId: "", // For updating specific dropoff
   });
   const [statusDropoffs, setStatusDropoffs] = useState<DispatchDropoff[]>([]);
@@ -931,6 +932,7 @@ const DispatchPage = () => {
           status: statusUpdate.status,
           location: statusUpdate.location || null,
           notes: statusUpdate.notes || null,
+          delay_reason: statusUpdate.delay_reason || null,
         },
       });
 
@@ -944,16 +946,18 @@ const DispatchPage = () => {
       });
       setIsStatusDialogOpen(false);
       setSelectedDispatch(null);
-      setStatusUpdate({ status: "", location: "", notes: "", selectedDropoffId: "" });
+      setStatusUpdate({ status: "", location: "", notes: "", delay_reason: "", selectedDropoffId: "" });
       setStatusDropoffs([]);
       fetchData();
     } catch (error: any) {
       // Fallback to direct update if edge function fails
       try {
         const oldStatus = selectedDispatch.status;
+        const updatePayload: any = { status: statusUpdate.status };
+        if (statusUpdate.delay_reason) updatePayload.delay_reason = statusUpdate.delay_reason;
         const { error: updateError } = await supabase
           .from("dispatches")
-          .update({ status: statusUpdate.status })
+          .update(updatePayload)
           .eq("id", selectedDispatch.id);
 
         if (updateError) throw updateError;
@@ -2101,6 +2105,37 @@ const DispatchPage = () => {
                 className="bg-secondary/50"
               />
             </div>
+
+            {/* Delay reason — shown when marking as delivered */}
+            {statusUpdate.status === "delivered" && (
+              <div className="space-y-2 p-3 rounded-lg border border-warning/30 bg-warning/5">
+                <Label className="text-warning font-medium flex items-center gap-2">
+                  <Clock className="w-4 h-4" />
+                  Delay Reason <span className="text-xs text-muted-foreground font-normal">(required if delivery exceeded ETA)</span>
+                </Label>
+                <Select
+                  value={statusUpdate.delay_reason || "none"}
+                  onValueChange={(v) => setStatusUpdate((prev) => ({ ...prev, delay_reason: v === "none" ? "" : v }))}
+                >
+                  <SelectTrigger className="bg-secondary/50">
+                    <SelectValue placeholder="Select delay reason (if applicable)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No delay / On time</SelectItem>
+                    <SelectItem value="traffic">Traffic congestion</SelectItem>
+                    <SelectItem value="vehicle_breakdown">Vehicle breakdown</SelectItem>
+                    <SelectItem value="bad_road">Bad road / Road condition</SelectItem>
+                    <SelectItem value="customer_unavailable">Customer unavailable</SelectItem>
+                    <SelectItem value="wrong_address">Wrong / incomplete address</SelectItem>
+                    <SelectItem value="weather">Weather conditions</SelectItem>
+                    <SelectItem value="security">Security / roadblock</SelectItem>
+                    <SelectItem value="loading_delay">Loading / offloading delay</SelectItem>
+                    <SelectItem value="driver_issue">Driver issue</SelectItem>
+                    <SelectItem value="other">Other (see notes)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Drop-off Points Status Section */}
             {statusDropoffs.length > 0 && (

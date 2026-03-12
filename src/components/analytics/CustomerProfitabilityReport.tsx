@@ -65,7 +65,12 @@ interface Invoice {
   created_at: string;
 }
 
-const CustomerProfitabilityReport = () => {
+interface Props {
+  month: number;
+  year: number;
+}
+
+const CustomerProfitabilityReport = ({ month, year }: Props) => {
   const [data, setData] = useState<CustomerProfitability[]>([]);
   const [loading, setLoading] = useState(true);
   const [totals, setTotals] = useState({ revenue: 0, cogs: 0, profit: 0 });
@@ -77,29 +82,40 @@ const CustomerProfitabilityReport = () => {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [month, year]);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
+      const periodStart = `${year}-${String(month).padStart(2, '0')}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      const periodEnd = `${year}-${String(month).padStart(2, '0')}-${lastDay}`;
+
       // Fetch customers
       const { data: customers } = await supabase
         .from("customers")
         .select("id, company_name");
 
-      // Fetch all invoices — revenue = all raised (same logic as P&L and Invoices page)
+      // Fetch invoices for the selected period using invoice_date
       const { data: invoices } = await supabase
         .from("invoices")
-        .select("customer_id, total_amount, status");
+        .select("customer_id, total_amount, status")
+        .gte("invoice_date", periodStart)
+        .lte("invoice_date", periodEnd);
 
-      // Fetch expenses with COGS flag and customer_id
+      // Fetch expenses for the selected period using expense_date
       const { data: expenses } = await supabase
         .from("expenses")
-        .select("customer_id, amount, is_cogs");
+        .select("customer_id, amount, is_cogs")
+        .gte("expense_date", periodStart)
+        .lte("expense_date", periodEnd);
 
-      // Fetch dispatches to count per customer
+      // Fetch dispatches for the selected period
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("customer_id, id");
+        .select("customer_id, id")
+        .gte("created_at", periodStart)
+        .lte("created_at", periodEnd + "T23:59:59");
 
       // Build profitability data
       const profitabilityMap = new Map<string, CustomerProfitability>();
@@ -281,9 +297,10 @@ const CustomerProfitabilityReport = () => {
       doc.text("Customer Profitability Report", pageWidth / 2, 20, { align: "center" });
 
       // Date
+      const monthName = new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' });
       doc.setFontSize(10);
       doc.setTextColor(100);
-      doc.text(`Generated: ${new Date().toLocaleDateString()}`, pageWidth / 2, 28, { align: "center" });
+      doc.text(`Period: ${monthName} ${year} | Generated: ${new Date().toLocaleDateString()}`, pageWidth / 2, 28, { align: "center" });
 
       // Summary
       doc.setFontSize(12);

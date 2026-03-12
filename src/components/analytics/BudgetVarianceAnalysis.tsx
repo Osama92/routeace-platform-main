@@ -54,33 +54,37 @@ const expenseCategoryLabels: Record<string, string> = {
   other: "Other",
 };
 
-const BudgetVarianceAnalysis = () => {
+interface Props {
+  month: number;
+  year: number;
+}
+
+const BudgetVarianceAnalysis = ({ month, year }: Props) => {
   const [variances, setVariances] = useState<CategoryVariance[]>([]);
   const [loading, setLoading] = useState(true);
   const [totals, setTotals] = useState({ budgeted: 0, actual: 0, variance: 0 });
   const [exporting, setExporting] = useState(false);
-  const currentMonth = new Date().getMonth() + 1;
-  const currentYear = new Date().getFullYear();
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [month, year]);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
-      // Fetch current month's approved target
+      // Fetch selected month's approved target
       const { data: target } = await supabase
         .from("financial_targets")
         .select("*")
         .eq("target_type", "monthly")
-        .eq("target_month", currentMonth)
-        .eq("target_year", currentYear)
+        .eq("target_month", month)
+        .eq("target_year", year)
         .eq("status", "approved")
         .maybeSingle();
 
-      // Fetch current month's expenses by category
-      const startOfMonth = new Date(currentYear, currentMonth - 1, 1).toISOString().split('T')[0];
-      const endOfMonth = new Date(currentYear, currentMonth, 0).toISOString().split('T')[0];
+      // Fetch selected month's expenses by category
+      const startOfMonth = new Date(year, month - 1, 1).toISOString().split('T')[0];
+      const endOfMonth = new Date(year, month, 0).toISOString().split('T')[0];
 
       const { data: expenses } = await supabase
         .from("expenses")
@@ -196,7 +200,7 @@ const BudgetVarianceAnalysis = () => {
     try {
       const doc = new jsPDF();
       const pageWidth = doc.internal.pageSize.getWidth();
-      const monthName = new Date().toLocaleString('default', { month: 'long' });
+      const monthName = new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' });
 
       // Title
       doc.setFontSize(18);
@@ -278,7 +282,7 @@ const BudgetVarianceAnalysis = () => {
     );
   }
 
-  const monthName = new Date().toLocaleString('default', { month: 'long' });
+  const monthName = new Date(year, month - 1, 1).toLocaleString('default', { month: 'long' });
 
   return (
     <div className="space-y-6">
