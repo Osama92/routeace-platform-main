@@ -212,11 +212,11 @@ const VendorPerformance = () => {
           if (startDate && dispatch.actual_delivery) {
             const msInTransit = new Date(dispatch.actual_delivery).getTime() - new Date(startDate).getTime();
             if (msInTransit >= 0) { // skip bad data
-              const daysInTransit = Math.ceil(msInTransit / (1000 * 60 * 60 * 24));
+              const hoursInTransit = msInTransit / (1000 * 60 * 60);
               const routeRow = Array.isArray((dispatch as any).routes) ? (dispatch as any).routes[0] : (dispatch as any).routes;
               const routeEta = routeRow?.estimated_duration_hours;
-              const targetDays = routeEta ? Number(routeEta) : DEFAULT_ETA_DAYS;
-              if (daysInTransit <= targetDays) {
+              const targetHours = (routeEta ? Number(routeEta) : DEFAULT_ETA_DAYS) * 24;
+              if (hoursInTransit <= targetHours) {
                 vendor.onTimeDeliveries++;
               } else {
                 vendor.lateDeliveries++;

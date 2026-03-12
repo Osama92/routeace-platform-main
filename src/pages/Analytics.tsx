@@ -94,11 +94,15 @@ const AnalyticsPage = () => {
         const deliveryDate = d.actual_delivery;
         if (!startDate || !deliveryDate) return false;
         const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
-        if (msInTransit < 0) return false; // bad data guard
-        const daysInTransit = Math.ceil(msInTransit / (1000 * 60 * 60 * 24));
+        if (msInTransit < 0) return false;
+        // Compare actual hours against ETA hours directly — avoids Math.ceil rounding
+        // e.g. 24.5 hours vs 24hr ETA → late, but 23.5 hours → on time
+        const hoursInTransit = msInTransit / (1000 * 60 * 60);
         const routeRow = Array.isArray(d.routes) ? d.routes[0] : d.routes;
-        const routeEtaDays = routeRow?.estimated_duration_hours;
-        return daysInTransit <= (routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS);
+        const etaHours = routeRow?.estimated_duration_hours
+          ? Number(routeRow.estimated_duration_hours) * 24
+          : DEFAULT_ETA_DAYS * 24;
+        return hoursInTransit <= etaHours;
       };
 
       // Fetch dispatches in date range — exclude historical (same logic as Dispatch page date filter)
@@ -155,7 +159,7 @@ const AnalyticsPage = () => {
           const ms = new Date(d.actual_delivery).getTime() - new Date(startD).getTime();
           if (ms < 0) return;
           deliveryCount++;
-          totalTransitDays += Math.ceil(ms / (1000 * 60 * 60 * 24));
+          totalTransitDays += ms / (1000 * 60 * 60 * 24); // actual fractional days
           const routeRow = Array.isArray(d.routes) ? d.routes[0] : d.routes;
           totalTargetDays += routeRow?.estimated_duration_hours ? Number(routeRow.estimated_duration_hours) : DEFAULT_ETA_DAYS_KPI;
         }

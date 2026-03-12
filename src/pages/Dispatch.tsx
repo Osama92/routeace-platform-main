@@ -1995,9 +1995,9 @@ const DispatchPage = () => {
                 const startDate = (dispatch as any).actual_pickup || (dispatch as any).scheduled_pickup || dispatch.created_at;
                 const endDate = (dispatch as any).actual_delivery;
                 if (!startDate || !endDate) return null;
-                const days = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24));
+                const hoursInTransit = (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60);
                 const eta = (dispatch as any).routes?.estimated_duration_hours ?? 2;
-                const isLate = days > eta;
+                const isLate = hoursInTransit > eta * 24;
                 const hasReason = !!(dispatch as any).delay_reason;
                 if (!isLate) return null;
                 return (
@@ -2491,14 +2491,16 @@ const DispatchPage = () => {
                       if (!startDate || !endDate) return null;
                       const ms = new Date(endDate).getTime() - new Date(startDate).getTime();
                       if (ms < 0) return null;
-                      const days = Math.ceil(ms / (1000 * 60 * 60 * 24));
+                      const hoursInTransit = ms / (1000 * 60 * 60);
                       const eta = selectedDispatch.routes?.estimated_duration_hours ?? 2;
-                      const onTime = days <= eta;
+                      const etaHours = eta * 24;
+                      const onTime = hoursInTransit <= etaHours;
+                      const displayDays = (hoursInTransit / 24).toFixed(1);
                       return (
                         <div className="space-y-1 col-span-2">
                           <p className="text-xs text-muted-foreground">OTD Status</p>
                           <p className={`font-semibold ${onTime ? "text-success" : "text-destructive"}`}>
-                            {days} day(s) in transit — {onTime ? "✓ On Time" : "✗ Late"} (ETA: {eta} day(s))
+                            {displayDays} day(s) in transit — {onTime ? "✓ On Time" : "✗ Late"} (ETA: {eta} day(s))
                           </p>
                         </div>
                       );
