@@ -45,10 +45,25 @@ import {
   Target,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { format, subMonths, startOfMonth, endOfMonth } from "date-fns";
+import { startOfMonth, endOfMonth } from "date-fns";
 import VendorTargetForm from "@/components/vendor/VendorTargetForm";
 import VendorTargetProgress from "@/components/vendor/VendorTargetProgress";
 import { useAuth } from "@/contexts/AuthContext";
+
+const MONTHS = [
+  { value: 1, label: "January" },
+  { value: 2, label: "February" },
+  { value: 3, label: "March" },
+  { value: 4, label: "April" },
+  { value: 5, label: "May" },
+  { value: 6, label: "June" },
+  { value: 7, label: "July" },
+  { value: 8, label: "August" },
+  { value: 9, label: "September" },
+  { value: 10, label: "October" },
+  { value: 11, label: "November" },
+  { value: 12, label: "December" },
+];
 
 interface VendorMetrics {
   id: string;
@@ -76,48 +91,37 @@ const formatCurrency = (amount: number) => {
 const VendorPerformance = () => {
   const [vendors, setVendors] = useState<VendorMetrics[]>([]);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState("3months");
-  const [selectedVendor, setSelectedVendor] = useState<string | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [activeTab, setActiveTab] = useState("overview");
   const { userRole } = useAuth();
 
   // Operations role should not see financial data
   const hideFinancialData = userRole === "operations";
 
+  const currentYear = new Date().getFullYear();
+  const years = [currentYear - 2, currentYear - 1, currentYear, currentYear + 1];
+
   useEffect(() => {
     fetchVendorMetrics();
-  }, [period]);
+  }, [selectedMonth, selectedYear]);
 
   const getDateRange = () => {
-    const end = endOfMonth(new Date());
-    let start: Date;
-    
-    switch (period) {
-      case "1month":
-        start = startOfMonth(new Date());
-        break;
-      case "3months":
-        start = startOfMonth(subMonths(new Date(), 2));
-        break;
-      case "6months":
-        start = startOfMonth(subMonths(new Date(), 5));
-        break;
-      case "1year":
-        start = startOfMonth(subMonths(new Date(), 11));
-        break;
-      default:
-        start = startOfMonth(subMonths(new Date(), 2));
-    }
-    
+    const start = startOfMonth(new Date(selectedYear, selectedMonth - 1));
+    const end = endOfMonth(new Date(selectedYear, selectedMonth - 1));
     return { start, end };
   };
+
+  const [vendorTargets, setVendorTargets] = useState<Record<string, number>>({});
 
   const fetchVendorMetrics = async () => {
     setLoading(true);
     try {
       const { start, end } = getDateRange();
+      const mtdStart = start.toISOString().split("T")[0];
+      const mtdEnd = end.toISOString().split("T")[0];
 
-      // Fetch all vendors regardless of partner_type (transporter, 3pl, 3pl_vendor, etc.)
+      // Fetch all partners regardless of partner_type
       const { data: partnersData, error: partnersError } = await supabase
         .from("partners")
         .select("id, company_name, partner_type");
@@ -126,9 +130,10 @@ const VendorPerformance = () => {
 
       const DEFAULT_ETA_DAYS = 2;
 
-      // Fetch dispatches — join both vehicles and drivers for partner_id lookup
-      // Vehicles are more reliably linked to a partner than drivers in this schema
-      const { data: dispatchesData, error: dispatchesError } = await supabase
+      // Fetch dispatches in the selected month.
+      // Vehicles link to partners via vendor_id (set in Fleet when fleet_type = "3pl").
+      // Drivers also have partner_id as a fallback.
+      const { data: dispatchesData } = await supabase
         .from("dispatches")
         .select(`
           id,
@@ -140,39 +145,51 @@ const VendorPerformance = () => {
           cost,
           driver_id,
           vehicle_id,
-          vehicles(partner_id),
+          vehicles(vendor_id, partner_id),
           drivers(partner_id),
           routes:route_id(estimated_duration_hours)
         `)
         .gte("created_at", start.toISOString())
         .lte("created_at", end.toISOString());
 
-      // Fetch invoices for revenue — get all invoices that link to dispatches in the period
-      // (no date filter on invoices: they may be created later than the dispatch)
       const dispatchIds = (dispatchesData || []).map((d: any) => d.id).filter(Boolean);
+
+      // Revenue: invoices linked to dispatches in this period (by dispatch_id),
+      // or invoices with invoice_date in this month if not dispatch-linked.
       const { data: invoicesData } = dispatchIds.length > 0
         ? await supabase.from("invoices").select("dispatch_id, total_amount").in("dispatch_id", dispatchIds)
         : { data: [] };
 
-      // Fetch SLA breaches for dispatches in the period
+      // SLA breaches for dispatches in the period
       const { data: breachesData } = dispatchIds.length > 0
         ? await supabase.from("sla_breach_alerts").select("dispatch_id").in("dispatch_id", dispatchIds)
         : { data: [] };
 
-      // Create invoice lookup
+      // Fetch trip targets for the selected month (sum across all truck types per vendor)
+      const { data: targetsData } = await supabase
+        .from("vendor_truck_targets")
+        .select("vendor_id, target_trips")
+        .eq("target_month", selectedMonth)
+        .eq("target_year", selectedYear);
+
+      const targetsMap: Record<string, number> = {};
+      (targetsData || []).forEach((t: any) => {
+        targetsMap[t.vendor_id] = (targetsMap[t.vendor_id] || 0) + t.target_trips;
+      });
+      setVendorTargets(targetsMap);
+
+      // Invoice lookup by dispatch_id
       const invoiceLookup: Record<string, number> = {};
       invoicesData?.forEach((inv) => {
         if (inv.dispatch_id) {
-          invoiceLookup[inv.dispatch_id] = inv.total_amount;
+          invoiceLookup[inv.dispatch_id] = (invoiceLookup[inv.dispatch_id] || 0) + Number(inv.total_amount || 0);
         }
       });
 
-      // Create breach lookup
       const breachLookup = new Set(breachesData?.map((b) => b.dispatch_id) || []);
 
-      // Calculate metrics per vendor
+      // Build metrics per partner
       const metricsMap: Record<string, VendorMetrics> = {};
-
       partnersData?.forEach((partner) => {
         metricsMap[partner.id] = {
           id: partner.id,
@@ -191,14 +208,11 @@ const VendorPerformance = () => {
       });
 
       dispatchesData?.forEach((dispatch: any) => {
-        // Resolve partner: prefer vehicle.partner_id (most reliably set), fall back to driver.partner_id
-        const vehiclePartnerId = Array.isArray(dispatch.vehicles)
-          ? dispatch.vehicles[0]?.partner_id
-          : dispatch.vehicles?.partner_id;
-        const driverPartnerId = Array.isArray(dispatch.drivers)
-          ? dispatch.drivers[0]?.partner_id
-          : dispatch.drivers?.partner_id;
-        const partnerId = vehiclePartnerId || driverPartnerId;
+        const veh = Array.isArray(dispatch.vehicles) ? dispatch.vehicles[0] : dispatch.vehicles;
+        const drv = Array.isArray(dispatch.drivers) ? dispatch.drivers[0] : dispatch.drivers;
+        // vendor_id is what Fleet saves when assigning a 3PL partner to a vehicle.
+        // Fall back to partner_id on vehicle, then partner_id on driver.
+        const partnerId = veh?.vendor_id || veh?.partner_id || drv?.partner_id;
         if (!partnerId || !metricsMap[partnerId]) return;
 
         const vendor = metricsMap[partnerId];
@@ -206,69 +220,44 @@ const VendorPerformance = () => {
 
         if (dispatch.status === "delivered") {
           vendor.completedTrips++;
-
-          // OTD: start priority actual_pickup → scheduled_pickup → created_at
-          const startDate = (dispatch as any).actual_pickup || (dispatch as any).scheduled_pickup || (dispatch as any).created_at;
+          const startDate = dispatch.actual_pickup || dispatch.scheduled_pickup || dispatch.created_at;
           if (startDate && dispatch.actual_delivery) {
             const msInTransit = new Date(dispatch.actual_delivery).getTime() - new Date(startDate).getTime();
-            if (msInTransit >= 0) { // skip bad data
+            if (msInTransit >= 0) {
               const hoursInTransit = msInTransit / (1000 * 60 * 60);
-              const routeRow = Array.isArray((dispatch as any).routes) ? (dispatch as any).routes[0] : (dispatch as any).routes;
-              const routeEta = routeRow?.estimated_duration_hours;
-              const targetHours = (routeEta ? Number(routeEta) : DEFAULT_ETA_DAYS) * 24;
-              if (hoursInTransit <= targetHours) {
-                vendor.onTimeDeliveries++;
-              } else {
-                vendor.lateDeliveries++;
-              }
+              const routeRow = Array.isArray(dispatch.routes) ? dispatch.routes[0] : dispatch.routes;
+              const targetHours = (routeRow?.estimated_duration_hours ? Number(routeRow.estimated_duration_hours) : DEFAULT_ETA_DAYS) * 24;
+              if (hoursInTransit <= targetHours) vendor.onTimeDeliveries++;
+              else vendor.lateDeliveries++;
             }
           }
         }
 
-        // Add revenue and cost
         vendor.totalRevenue += invoiceLookup[dispatch.id] || 0;
         vendor.totalCost += dispatch.cost || 0;
-
-        // Check SLA breach
-        if (breachLookup.has(dispatch.id)) {
-          vendor.slaBreaches++;
-        }
+        if (breachLookup.has(dispatch.id)) vendor.slaBreaches++;
       });
 
-      // Calculate derived metrics
       Object.values(metricsMap).forEach((vendor) => {
-        // Use only trips with timestamp data (onTime + late) as denominator
         const trackedTrips = vendor.onTimeDeliveries + vendor.lateDeliveries;
         vendor.onTimeRate = trackedTrips > 0
-          ? Math.round((vendor.onTimeDeliveries / trackedTrips) * 100)
-          : 0;
-        
+          ? Math.round((vendor.onTimeDeliveries / trackedTrips) * 100) : 0;
         vendor.avgTripValue = vendor.completedTrips > 0
-          ? Math.round(vendor.totalRevenue / vendor.completedTrips)
-          : 0;
+          ? Math.round(vendor.totalRevenue / vendor.completedTrips) : 0;
 
-        // Performance score: weighted average
-        const onTimeWeight = 40;
-        const slaWeight = 30;
-        const completionWeight = 30;
-        
-        const completionRate = vendor.totalTrips > 0
-          ? (vendor.completedTrips / vendor.totalTrips) * 100
-          : 0;
-        
+        const completionRate = vendor.totalTrips > 0 ? (vendor.completedTrips / vendor.totalTrips) * 100 : 0;
         const slaPenalty = vendor.completedTrips > 0
-          ? Math.min(100, (vendor.slaBreaches / vendor.completedTrips) * 100 * 2)
-          : 0;
-
+          ? Math.min(100, (vendor.slaBreaches / vendor.completedTrips) * 100 * 2) : 0;
         vendor.performanceScore = Math.round(
-          (vendor.onTimeRate * onTimeWeight / 100) +
-          ((100 - slaPenalty) * slaWeight / 100) +
-          (completionRate * completionWeight / 100)
+          (vendor.onTimeRate * 40 / 100) +
+          ((100 - slaPenalty) * 30 / 100) +
+          (completionRate * 30 / 100)
         );
       });
 
-      // Sort by performance score (show all partners, even those with 0 trips)
+      // Only show partners that have activity in this period OR have targets set
       const sortedVendors = Object.values(metricsMap)
+        .filter((v) => v.totalTrips > 0 || targetsMap[v.id] > 0)
         .sort((a, b) => b.performanceScore - a.performanceScore);
 
       setVendors(sortedVendors);
@@ -286,14 +275,17 @@ const VendorPerformance = () => {
     return <Badge variant="destructive">Needs Improvement</Badge>;
   };
 
-  const chartData = vendors.slice(0, 10).map((v) => ({
-    name: v.name.length > 15 ? v.name.slice(0, 15) + "..." : v.name,
-    "On-Time Rate": v.onTimeRate,
-    "Performance Score": v.performanceScore,
-    Trips: v.completedTrips,
-    // Revenue in thousands for chart readability
-    "Revenue (₦k)": Math.round(v.totalRevenue / 1000),
-  }));
+  const chartData = vendors
+    .filter(v => v.totalTrips > 0)
+    .slice(0, 10)
+    .map((v) => ({
+      name: v.name.length > 15 ? v.name.slice(0, 15) + "..." : v.name,
+      "On-Time Rate": v.onTimeRate,
+      "Performance Score": v.performanceScore,
+      "Trips": v.completedTrips,
+      "Target": vendorTargets[v.id] || 0,
+      "Revenue (₦k)": Math.round(v.totalRevenue / 1000),
+    }));
 
   const totals = vendors.reduce(
     (acc, v) => ({
@@ -337,17 +329,26 @@ const VendorPerformance = () => {
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6 mt-6">
             {/* Header Actions */}
-            <div className="flex items-center justify-between">
-              <div className="flex gap-3">
-                <Select value={period} onValueChange={setPeriod}>
-                  <SelectTrigger className="w-40">
-                    <SelectValue placeholder="Period" />
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex gap-2">
+                <Select value={selectedMonth.toString()} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
+                  <SelectTrigger className="w-36">
+                    <SelectValue placeholder="Month" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1month">This Month</SelectItem>
-                    <SelectItem value="3months">Last 3 Months</SelectItem>
-                    <SelectItem value="6months">Last 6 Months</SelectItem>
-                    <SelectItem value="1year">Last Year</SelectItem>
+                    {MONTHS.map((m) => (
+                      <SelectItem key={m.value} value={m.value.toString()}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
+                  <SelectTrigger className="w-24">
+                    <SelectValue placeholder="Year" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {years.map((y) => (
+                      <SelectItem key={y} value={y.toString()}>{y}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -368,7 +369,7 @@ const VendorPerformance = () => {
               {[
                 {
                   label: "Active Partners",
-                  value: vendors.length.toString(),
+                  value: vendors.filter(v => v.totalTrips > 0).length.toString(),
                   icon: Handshake,
                   color: "text-primary",
                 },
@@ -418,7 +419,7 @@ const VendorPerformance = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <BarChart3 className="w-5 h-5" />
-                  Partner Comparison
+                  Partner Comparison — {MONTHS.find(m => m.value === selectedMonth)?.label} {selectedYear}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -450,8 +451,9 @@ const VendorPerformance = () => {
                           }
                         />
                         <Legend />
-                        <Bar yAxisId="left" dataKey="On-Time Rate" fill="hsl(var(--primary))" />
-                        <Bar yAxisId="left" dataKey="Performance Score" fill="hsl(var(--success))" />
+                        <Bar yAxisId="left" dataKey="Trips" fill="hsl(var(--primary))" />
+                        <Bar yAxisId="left" dataKey="Target" fill="hsl(var(--muted-foreground))" opacity={0.5} />
+                        <Bar yAxisId="left" dataKey="On-Time Rate" fill="hsl(var(--success))" />
                         {!hideFinancialData && (
                           <Bar yAxisId="right" dataKey="Revenue (₦k)" fill="hsl(var(--warning))" />
                         )}
@@ -473,7 +475,7 @@ const VendorPerformance = () => {
                     <TableRow>
                       <TableHead className="w-12">#</TableHead>
                       <TableHead>Partner</TableHead>
-                      <TableHead className="text-center">Trips</TableHead>
+                      <TableHead className="text-center">Trips vs Target</TableHead>
                       <TableHead className="text-center">On-Time Rate</TableHead>
                       <TableHead className="text-center">SLA Breaches</TableHead>
                       {!hideFinancialData && <TableHead className="text-right">Revenue</TableHead>}
@@ -483,15 +485,33 @@ const VendorPerformance = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {vendors.map((vendor, index) => (
+                    {vendors.map((vendor, index) => {
+                      const target = vendorTargets[vendor.id] || 0;
+                      const tripPct = target > 0 ? Math.round((vendor.completedTrips / target) * 100) : null;
+                      return (
                       <TableRow key={vendor.id}>
                         <TableCell className="font-medium">{index + 1}</TableCell>
                         <TableCell className="font-medium">{vendor.name}</TableCell>
-                        <TableCell className="text-center">{vendor.completedTrips}</TableCell>
+                        <TableCell className="text-center">
+                          {target > 0 ? (
+                            <div className="space-y-1 min-w-[100px]">
+                              <div className="text-sm">
+                                <span className="font-medium">{vendor.completedTrips}</span>
+                                <span className="text-muted-foreground"> / {target}</span>
+                                <span className={`ml-1 text-xs font-semibold ${tripPct! >= 80 ? "text-success" : tripPct! >= 50 ? "text-warning" : "text-destructive"}`}>
+                                  ({tripPct}%)
+                                </span>
+                              </div>
+                              <Progress value={Math.min(tripPct!, 100)} className="h-1.5" />
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">{vendor.completedTrips} <span className="text-xs">(no target)</span></span>
+                          )}
+                        </TableCell>
                         <TableCell className="text-center">
                           <div className="flex items-center gap-2">
-                            <Progress 
-                              value={vendor.onTimeRate} 
+                            <Progress
+                              value={vendor.onTimeRate}
                               className="h-2 w-16"
                             />
                             <span className={vendor.onTimeRate >= 80 ? "text-success" : "text-warning"}>
@@ -526,11 +546,12 @@ const VendorPerformance = () => {
                           {getScoreBadge(vendor.performanceScore)}
                         </TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                     {vendors.length === 0 && !loading && (
                       <TableRow>
                         <TableCell colSpan={hideFinancialData ? 7 : 9} className="text-center py-8 text-muted-foreground">
-                          No partner data available for this period
+                          No partner activity for {MONTHS.find(m => m.value === selectedMonth)?.label} {selectedYear}. Ensure vehicles used in dispatches have a Partner assigned (Fleet → edit vehicle → Partner field).
                         </TableCell>
                       </TableRow>
                     )}
