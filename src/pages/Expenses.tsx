@@ -161,6 +161,7 @@ const Expenses = () => {
   const [selectedMonth, setSelectedMonth] = useState<number>(currentDate.getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState<number>(currentDate.getFullYear());
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -375,6 +376,77 @@ const Expenses = () => {
     });
     setReceiptFile(null);
     setReceiptPreview("");
+    setEditingExpense(null);
+  };
+
+  const handleOpenEdit = (expense: Expense) => {
+    setEditingExpense(expense);
+    setFormData({
+      expense_date: expense.expense_date,
+      category: expense.category,
+      description: expense.description,
+      amount: expense.amount.toString(),
+      vendor_id: expense.vendor_id || "",
+      vehicle_id: expense.vehicle_id || "",
+      driver_id: expense.driver_id || "",
+      customer_id: expense.customer_id || "",
+      payment_account_id: expense.payment_account_id || "",
+      notes: expense.notes || "",
+      is_recurring: expense.is_recurring,
+      is_cogs: expense.is_cogs,
+      cogs_vendor_id: expense.cogs_vendor_id || "",
+      receipt_url: expense.receipt_url || "",
+    });
+    setReceiptFile(null);
+    setReceiptPreview(expense.receipt_url || "");
+    setIsDialogOpen(true);
+  };
+
+  const handleUpdate = async () => {
+    if (!editingExpense || !formData.category || !formData.description || !formData.amount) {
+      toast({ title: "Validation Error", description: "Please fill in all required fields", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      let receiptUrl = formData.receipt_url;
+      if (receiptFile) {
+        receiptUrl = await uploadReceipt() || receiptUrl;
+      }
+      const updateData = {
+        expense_date: formData.expense_date,
+        category: formData.category as Expense["category"],
+        description: formData.description,
+        amount: parseFloat(formData.amount),
+        vendor_id: formData.vendor_id || null,
+        vehicle_id: formData.vehicle_id || null,
+        driver_id: formData.driver_id || null,
+        customer_id: (formData.customer_id && formData.customer_id !== "none") ? formData.customer_id : null,
+        payment_account_id: formData.payment_account_id || null,
+        notes: formData.notes || null,
+        is_recurring: formData.is_recurring,
+        is_cogs: formData.is_cogs,
+        cogs_vendor_id: formData.is_cogs ? (formData.cogs_vendor_id || null) : null,
+        receipt_url: receiptUrl || null,
+      };
+      const { error } = await supabase.from("expenses").update(updateData).eq("id", editingExpense.id);
+      if (error) throw error;
+      await logChange({
+        table_name: "expenses",
+        record_id: editingExpense.id,
+        action: "update",
+        old_data: editingExpense,
+        new_data: updateData,
+      });
+      toast({ title: "Success", description: "Expense updated successfully" });
+      setIsDialogOpen(false);
+      resetForm();
+      fetchData();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to update expense", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const openManageAccounts = () => {
@@ -663,7 +735,7 @@ const Expenses = () => {
               )}
               Sync to Zoho
             </Button>
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
               <DialogTrigger asChild>
                 <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
                   <Plus className="w-4 h-4 mr-2" />
@@ -672,9 +744,9 @@ const Expenses = () => {
               </DialogTrigger>
               <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle className="font-heading">Add New Expense</DialogTitle>
+                  <DialogTitle className="font-heading">{editingExpense ? "Edit Expense" : "Add New Expense"}</DialogTitle>
                   <DialogDescription>
-                    Record a new business expense with category and details.
+                    {editingExpense ? "Update the expense details below." : "Record a new business expense with category and details."}
                   </DialogDescription>
                 </DialogHeader>
 
@@ -982,11 +1054,11 @@ const Expenses = () => {
                 </div>
 
                 <DialogFooter className="mt-6">
-                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                  <Button variant="outline" onClick={() => { setIsDialogOpen(false); resetForm(); }}>
                     Cancel
                   </Button>
-                  <Button onClick={handleSubmit} disabled={saving || uploading}>
-                    {saving || uploading ? "Saving..." : "Add Expense"}
+                  <Button onClick={editingExpense ? handleUpdate : handleSubmit} disabled={saving || uploading}>
+                    {saving || uploading ? "Saving..." : editingExpense ? "Save Changes" : "Add Expense"}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -1120,19 +1192,29 @@ const Expenses = () => {
                     </TableCell>
                     {canManage && (
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => syncToZoho(expense.id)}
-                          disabled={syncing || expense.approval_status !== 'approved'}
-                          title={expense.approval_status !== 'approved' ? "Expense must be approved first" : expense.zoho_synced_at ? "Re-sync to Zoho" : "Sync to Zoho"}
-                        >
-                          {syncing ? (
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <CloudUpload className="w-4 h-4" />
-                          )}
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleOpenEdit(expense)}
+                            title="Edit expense"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => syncToZoho(expense.id)}
+                            disabled={syncing || expense.approval_status !== 'approved'}
+                            title={expense.approval_status !== 'approved' ? "Expense must be approved first" : expense.zoho_synced_at ? "Re-sync to Zoho" : "Sync to Zoho"}
+                          >
+                            {syncing ? (
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <CloudUpload className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
                       </TableCell>
                     )}
                   </TableRow>
