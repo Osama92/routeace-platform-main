@@ -144,6 +144,8 @@ const MONTHS = [
 ];
 const YEARS = Array.from({ length: 5 }, (_, i) => currentDate.getFullYear() - i);
 
+const isUUID = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const Expenses = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [vendors, setVendors] = useState<Partner[]>([]);
@@ -315,6 +317,7 @@ const Expenses = () => {
         vehicle_id: formData.vehicle_id || null,
         driver_id: formData.driver_id || null,
         customer_id: (formData.customer_id && formData.customer_id !== "none") ? formData.customer_id : null,
+        payment_account_id: (formData.payment_account_id && isUUID(formData.payment_account_id)) ? formData.payment_account_id : null,
         notes: formData.notes || null,
         is_recurring: formData.is_recurring,
         is_cogs: formData.is_cogs,
@@ -390,7 +393,7 @@ const Expenses = () => {
       vehicle_id: expense.vehicle_id || "",
       driver_id: expense.driver_id || "",
       customer_id: expense.customer_id || "",
-      payment_account_id: expense.payment_account_id || "",
+      payment_account_id: (expense.payment_account_id && isUUID(expense.payment_account_id)) ? expense.payment_account_id : "",
       notes: expense.notes || "",
       is_recurring: expense.is_recurring,
       is_cogs: expense.is_cogs,
@@ -422,7 +425,7 @@ const Expenses = () => {
         vehicle_id: formData.vehicle_id || null,
         driver_id: formData.driver_id || null,
         customer_id: (formData.customer_id && formData.customer_id !== "none") ? formData.customer_id : null,
-        payment_account_id: formData.payment_account_id || null,
+        payment_account_id: (formData.payment_account_id && isUUID(formData.payment_account_id)) ? formData.payment_account_id : null,
         notes: formData.notes || null,
         is_recurring: formData.is_recurring,
         is_cogs: formData.is_cogs,

@@ -345,7 +345,7 @@ const AnalyticsPage = () => {
           : endOfDay(new Date(Math.min(bucketStart.getTime() + 6 * 86400000, end.getTime())));
 
         const bucketInvoices = invoices?.filter(inv => {
-          const d = new Date(inv.created_at);
+          const d = new Date(inv.invoice_date);
           return d >= bucketStart && d <= bucketEnd;
         }) || [];
         const bucketExpenses = expenses?.filter(e => {
@@ -730,24 +730,28 @@ const AnalyticsPage = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {delayReasons.map((item, index) => {
-                const maxCount = delayReasons[0].count;
-                const pct = Math.round((item.count / maxCount) * 100);
-                return (
-                  <div key={index} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-foreground">{item.reason}</span>
-                      <span className="font-semibold text-warning">{item.count} trip{item.count > 1 ? "s" : ""}</span>
+              {(() => {
+                const total = delayReasons.reduce((s, r) => s + r.count, 0);
+                return delayReasons.map((item, index) => {
+                  const pct = Math.round((item.count / total) * 100);
+                  return (
+                    <div key={index} className="space-y-1">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-foreground">{item.reason}</span>
+                        <span className="font-semibold text-warning">
+                          {pct}% <span className="text-xs text-muted-foreground font-normal">({item.count} trip{item.count > 1 ? "s" : ""})</span>
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-warning rounded-full transition-all duration-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-warning rounded-full transition-all duration-500"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
         </motion.div>
