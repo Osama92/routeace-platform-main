@@ -245,13 +245,22 @@ const VendorPerformance = () => {
         vendor.avgTripValue = vendor.completedTrips > 0
           ? Math.round(vendor.totalRevenue / vendor.completedTrips) : 0;
 
-        const completionRate = vendor.totalTrips > 0 ? (vendor.completedTrips / vendor.totalTrips) * 100 : 0;
         const slaPenalty = vendor.completedTrips > 0
           ? Math.min(100, (vendor.slaBreaches / vendor.completedTrips) * 100 * 2) : 0;
+        const slaScore = 100 - slaPenalty;
+
+        // Score = 50% Target Attainment + 25% On-Time + 25% SLA
+        // Each component: (actual % achieved) × weight
+        // e.g. 10% of target → 10% × 50 = 5 pts; 80% OTD → 80% × 25 = 20 pts; etc.
+        // Max possible = 50 + 25 + 25 = 100
+        const target = targetsMap[vendor.id] || 0;
+        const targetAttainmentPct = target > 0
+          ? Math.min(100, (vendor.completedTrips / target) * 100) : 0;
+
         vendor.performanceScore = Math.round(
-          (vendor.onTimeRate * 40 / 100) +
-          ((100 - slaPenalty) * 30 / 100) +
-          (completionRate * 30 / 100)
+          (targetAttainmentPct * 50 / 100) +
+          (vendor.onTimeRate * 25 / 100) +
+          (slaScore * 25 / 100)
         );
       });
 
@@ -269,9 +278,9 @@ const VendorPerformance = () => {
   };
 
   const getScoreBadge = (score: number) => {
-    if (score >= 80) return <Badge className="bg-success text-success-foreground">Excellent</Badge>;
-    if (score >= 60) return <Badge className="bg-warning text-warning-foreground">Good</Badge>;
-    if (score >= 40) return <Badge variant="secondary">Average</Badge>;
+    if (score >= 75) return <Badge className="bg-success text-success-foreground">Excellent</Badge>;
+    if (score >= 55) return <Badge className="bg-warning text-warning-foreground">Good</Badge>;
+    if (score >= 35) return <Badge variant="secondary">Average</Badge>;
     return <Badge variant="destructive">Needs Improvement</Badge>;
   };
 
@@ -480,7 +489,9 @@ const VendorPerformance = () => {
                       <TableHead className="text-center">SLA Breaches</TableHead>
                       {!hideFinancialData && <TableHead className="text-right">Revenue</TableHead>}
                       {!hideFinancialData && <TableHead className="text-right">Avg. Trip Value</TableHead>}
-                      <TableHead className="text-center">Score</TableHead>
+                      <TableHead className="text-center">
+                        <span title="Score = 50% Target Attainment + 25% On-Time Rate + 25% SLA Compliance">Score ⓘ</span>
+                      </TableHead>
                       <TableHead className="text-center">Status</TableHead>
                     </TableRow>
                   </TableHeader>
