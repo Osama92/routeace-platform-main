@@ -186,29 +186,19 @@ const DriverBonuses = () => {
 
       if (driverErr) throw driverErr;
 
-      // Fetch dispatches for the period
+      // Fetch dispatches for the period — include route ETA for consistent OTD calculation
       const { data: dispatches, error: dispatchErr } = await supabase
         .from("dispatches")
-        .select("id, driver_id, status, scheduled_delivery, actual_delivery")
+        .select("id, driver_id, status, actual_pickup, scheduled_pickup, created_at, actual_delivery, routes:route_id(estimated_duration_hours)")
         .gte("created_at", startDate.toISOString())
         .lte("created_at", endDate.toISOString());
 
       if (dispatchErr) throw dispatchErr;
 
-      // Fetch SLA breaches for the period
-      const { data: breaches, error: breachErr } = await supabase
-        .from("sla_breach_alerts")
-        .select("dispatch_id")
-        .gte("created_at", startDate.toISOString())
-        .lte("created_at", endDate.toISOString());
-
-      if (breachErr) throw breachErr;
-
       // Group data by driver
       const dispatchesByDriver: Record<string, any[]> = {};
-      const breachesByDispatch = new Set((breaches || []).map(b => b.dispatch_id));
 
-      (dispatches || []).forEach(d => {
+      (dispatches || []).forEach((d: any) => {
         if (d.driver_id) {
           if (!dispatchesByDriver[d.driver_id]) dispatchesByDriver[d.driver_id] = [];
           dispatchesByDriver[d.driver_id].push(d);
@@ -222,24 +212,31 @@ const DriverBonuses = () => {
         const driverDispatches = dispatchesByDriver[driver.id] || [];
         const deliveredTrips = driverDispatches.filter(d => d.status === "delivered");
         
-        // Calculate on-time rate
+        // OTD: actual transit time vs route ETA (consistent with all other screens)
+        // SLA breach = late delivery (same metric, inverse view — no separate table)
         let onTimeCount = 0;
-        deliveredTrips.forEach(d => {
-          if (d.scheduled_delivery && d.actual_delivery) {
-            const scheduled = new Date(d.scheduled_delivery);
-            const actual = new Date(d.actual_delivery);
-            if (actual <= scheduled) onTimeCount++;
+        let lateCount = 0;
+        deliveredTrips.forEach((d: any) => {
+          const startDate = d.actual_pickup || d.scheduled_pickup || d.created_at;
+          if (startDate && d.actual_delivery) {
+            const ms = new Date(d.actual_delivery).getTime() - new Date(startDate).getTime();
+            if (ms >= 0) {
+              const hoursInTransit = ms / (1000 * 60 * 60);
+              const etaHours = (d.routes?.estimated_duration_hours ? Number(d.routes.estimated_duration_hours) : 2) * 24;
+              if (hoursInTransit <= etaHours) onTimeCount++;
+              else lateCount++;
+            }
           } else {
-            onTimeCount++; // Count as on-time if no scheduled time
+            onTimeCount++; // no timestamps — assume on time
           }
         });
-        
-        const onTimeRate = deliveredTrips.length > 0 
-          ? (onTimeCount / deliveredTrips.length) * 100 
+
+        const onTimeRate = deliveredTrips.length > 0
+          ? (onTimeCount / deliveredTrips.length) * 100
           : 100;
 
-        // Count SLA breaches
-        const driverBreaches = driverDispatches.filter(d => breachesByDispatch.has(d.id)).length;
+        // SLA breaches = late deliveries
+        const driverBreaches = lateCount;
 
         const driverMetrics = {
           driver_id: driver.id,

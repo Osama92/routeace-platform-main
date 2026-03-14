@@ -104,17 +104,12 @@ const DriverPerformance = () => {
       // Fetch dispatches within date range
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, driver_id, status, scheduled_delivery, actual_delivery, distance_km")
+        .select("id, driver_id, status, actual_pickup, scheduled_pickup, created_at, actual_delivery, distance_km, routes:route_id(estimated_duration_hours)")
         .gte("created_at", start.toISOString())
         .lte("created_at", end.toISOString())
         .not("driver_id", "is", null);
 
-      // Fetch SLA breaches
-      const { data: breaches } = await supabase
-        .from("sla_breach_alerts")
-        .select("dispatch_id, dispatches(driver_id)")
-        .gte("created_at", start.toISOString())
-        .lte("created_at", end.toISOString());
+      // SLA breaches are derived from OTD — late deliveries = SLA breaches (no separate table needed)
 
       // Build performance map
       const performanceMap = new Map<string, DriverPerformanceData>();
@@ -142,37 +137,30 @@ const DriverPerformance = () => {
         const perf = performanceMap.get(dispatch.driver_id);
         if (!perf) return;
 
-        if (dispatch.status === "delivered") {
+        if ((dispatch as any).status === "delivered") {
           perf.total_trips += 1;
-          perf.total_distance_km += Number(dispatch.distance_km || 0);
+          perf.total_distance_km += Number((dispatch as any).distance_km || 0);
 
-          if (dispatch.scheduled_delivery && dispatch.actual_delivery) {
-            const scheduled = new Date(dispatch.scheduled_delivery);
-            const actual = new Date(dispatch.actual_delivery);
-            if (actual <= scheduled) {
-              perf.on_time_count += 1;
-            } else {
-              perf.late_count += 1;
+          const startDate = (dispatch as any).actual_pickup || (dispatch as any).scheduled_pickup || (dispatch as any).created_at;
+          const deliveryDate = (dispatch as any).actual_delivery;
+          if (startDate && deliveryDate) {
+            const ms = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
+            if (ms >= 0) {
+              const hoursInTransit = ms / (1000 * 60 * 60);
+              const routeRow = (dispatch as any).routes;
+              const etaHours = (routeRow?.estimated_duration_hours ? Number(routeRow.estimated_duration_hours) : 2) * 24;
+              if (hoursInTransit <= etaHours) perf.on_time_count += 1;
+              else perf.late_count += 1;
             }
           }
         }
       });
 
-      // Count SLA breaches per driver
-      breaches?.forEach((breach: any) => {
-        const driverId = breach.dispatches?.driver_id;
-        if (driverId) {
-          const perf = performanceMap.get(driverId);
-          if (perf) {
-            perf.sla_breaches += 1;
-          }
-        }
-      });
-
-      // Calculate rates and averages
+      // Calculate rates and averages; sla_breaches = late_count (same metric, inverse view)
       performanceMap.forEach((perf) => {
         const totalTimed = perf.on_time_count + perf.late_count;
         perf.on_time_rate = totalTimed > 0 ? (perf.on_time_count / totalTimed) * 100 : 0;
+        perf.sla_breaches = perf.late_count;
         perf.avg_trip_distance = perf.total_trips > 0 ? perf.total_distance_km / perf.total_trips : 0;
       });
 

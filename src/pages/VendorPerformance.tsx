@@ -160,11 +160,6 @@ const VendorPerformance = () => {
         ? await supabase.from("invoices").select("dispatch_id, total_amount").in("dispatch_id", dispatchIds)
         : { data: [] };
 
-      // SLA breaches for dispatches in the period
-      const { data: breachesData } = dispatchIds.length > 0
-        ? await supabase.from("sla_breach_alerts").select("dispatch_id").in("dispatch_id", dispatchIds)
-        : { data: [] };
-
       // Fetch trip targets for the selected month (sum across all truck types per vendor)
       const { data: targetsData } = await supabase
         .from("vendor_truck_targets")
@@ -185,8 +180,6 @@ const VendorPerformance = () => {
           invoiceLookup[inv.dispatch_id] = (invoiceLookup[inv.dispatch_id] || 0) + Number(inv.total_amount || 0);
         }
       });
-
-      const breachLookup = new Set(breachesData?.map((b) => b.dispatch_id) || []);
 
       // Build metrics per partner
       const metricsMap: Record<string, VendorMetrics> = {};
@@ -235,7 +228,6 @@ const VendorPerformance = () => {
 
         vendor.totalRevenue += invoiceLookup[dispatch.id] || 0;
         vendor.totalCost += dispatch.cost || 0;
-        if (breachLookup.has(dispatch.id)) vendor.slaBreaches++;
       });
 
       Object.values(metricsMap).forEach((vendor) => {
@@ -245,14 +237,16 @@ const VendorPerformance = () => {
         vendor.avgTripValue = vendor.completedTrips > 0
           ? Math.round(vendor.totalRevenue / vendor.completedTrips) : 0;
 
-        const slaPenalty = vendor.completedTrips > 0
-          ? Math.min(100, (vendor.slaBreaches / vendor.completedTrips) * 100 * 2) : 0;
-        const slaScore = 100 - slaPenalty;
+        // SLA breaches = late deliveries (trips that didn't meet OTD — same metric, inverse view)
+        vendor.slaBreaches = vendor.lateDeliveries;
 
-        // Score = 50% Target Attainment + 25% On-Time + 25% SLA
-        // Each component: (actual % achieved) × weight
-        // e.g. 10% of target → 10% × 50 = 5 pts; 80% OTD → 80% × 25 = 20 pts; etc.
-        // Max possible = 50 + 25 + 25 = 100
+        // SLA compliance score: % of delivered trips that met the deadline
+        // e.g. 2 late out of 5 delivered → slaScore = 60%
+        const slaScore = trackedTrips > 0
+          ? Math.round((vendor.onTimeDeliveries / trackedTrips) * 100) : 100;
+
+        // Score = 50% Target Attainment + 25% On-Time Rate + 25% SLA Compliance
+        // All three express the same 0-100% scale so they sum cleanly to 100
         const target = targetsMap[vendor.id] || 0;
         const targetAttainmentPct = target > 0
           ? Math.min(100, (vendor.completedTrips / target) * 100) : 0;
