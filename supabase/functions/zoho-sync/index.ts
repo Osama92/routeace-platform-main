@@ -126,32 +126,41 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
       const itemName = `${item.description}${tonnagePart}`;
       const itemDescription = item.location || undefined;
 
+      // For inclusive VAT, extract the net rate (rate ÷ 1.075) so that when Zoho applies
+      // its exclusive 7.5% on top it arrives at the same gross total as the platform.
+      // Zoho does not honour is_inclusive_tax at line-item level on invoices.
+      const mainRate = item.vatType === 'inclusive'
+        ? Math.round((item.price / 1.075) * 100) / 100
+        : item.price;
+
       const mainLine: any = {
         name: itemName,
         description: itemDescription,
         quantity: item.quantity,
-        rate: item.price,
+        rate: mainRate,
       };
 
-      // Apply VAT on main line item
+      // Apply VAT on main line item (always as exclusive in Zoho — rate already adjusted above)
       if (vatTaxId && item.vatType !== 'none') {
         mainLine.tax_id = vatTaxId;
-        mainLine.is_inclusive_tax = item.vatType === 'inclusive';
       }
 
       const lines: any[] = [mainLine];
 
       if (item.serviceCharge > 0) {
+        const scRate = item.serviceChargeVat === 'inclusive'
+          ? Math.round((item.serviceCharge / 1.075) * 100) / 100
+          : item.serviceCharge;
+
         const scLine: any = {
           name: `${item.description} - Service Charge${tonnagePart}`,
           description: itemDescription,
           quantity: 1,
-          rate: item.serviceCharge,
+          rate: scRate,
         };
         // Apply VAT on service charge line
         if (vatTaxId && item.serviceChargeVat !== 'none') {
           scLine.tax_id = vatTaxId;
-          scLine.is_inclusive_tax = item.serviceChargeVat === 'inclusive';
         }
         lines.push(scLine);
       }
