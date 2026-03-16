@@ -706,18 +706,21 @@ const InvoicesPage = () => {
 
       // If invoice was previously synced to Zoho, resync automatically.
       // If user explicitly clicked "Save & Sync", sync regardless.
-      const shouldSync = syncAfter || !!editingInvoice.zoho_invoice_id;
+      const shouldSync = syncAfter || !!(editingInvoice.zoho_invoice_id);
       if (shouldSync) {
         try {
           const { data: syncData, error: syncError } = await supabase.functions.invoke('zoho-sync', {
             body: { action: 'sync_invoice', invoiceId: editingInvoice.id },
           });
-          if (syncError) throw syncError;
+          // supabase.functions.invoke sets syncError for non-2xx HTTP, but the real message
+          // is in syncData.error (the JSON body returned by the edge function)
+          const zohoErrMsg = syncData?.error || syncError?.message;
+          if (zohoErrMsg) throw new Error(zohoErrMsg);
           toast({
             title: "Saved & Synced to Zoho",
-            description: syncData?.success
-              ? "Invoice updated and resynced to Zoho successfully"
-              : "Invoice saved. Zoho sync returned unexpected response.",
+            description: syncData?.action === 'updated'
+              ? "Invoice updated in Zoho successfully"
+              : "Invoice created in Zoho successfully",
           });
         } catch (syncErr: any) {
           // Save succeeded — don't block the user, just warn about sync

@@ -200,9 +200,9 @@ async function syncInvoiceToZoho(
   const userNotes = invoice.notes?.includes('\n\nNotes:')
     ? invoice.notes.split('\n\nNotes:')[1].trim() : '';
 
-  const zohoInvoiceData: any = {
+  // Base payload shared by create and update
+  const baseInvoiceData: any = {
     customer_id: zohoCustomerId,
-    invoice_number: invoice.invoice_number,
     date: invoice.invoice_date || invoice.created_at.split('T')[0],
     due_date: invoice.due_date || undefined,
     line_items: zohoLineItems,
@@ -210,14 +210,31 @@ async function syncInvoiceToZoho(
   };
 
   // If invoice already exists in Zoho → UPDATE (PUT) it instead of creating a duplicate
+  // NOTE: invoice_number is intentionally omitted from PUT — Zoho treats it as immutable
+  // and returns "Invoice number already exists" if you re-send it on an update.
   if (invoice.zoho_invoice_id) {
     console.log('Updating existing Zoho invoice:', invoice.zoho_invoice_id);
+
+    // Zoho rejects PUT on sent/void invoices — convert back to draft first
+    const markDraftResponse = await fetch(
+      `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}/status/draft?organization_id=${organizationId}`,
+      {
+        method: 'POST',
+        headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+      }
+    );
+    const draftResult = await markDraftResponse.json();
+    if (draftResult.code !== 0) {
+      // If it's already draft (code 0) or not found — proceed anyway, PUT may still work
+      console.warn('Could not mark invoice as draft before update:', draftResult.message || draftResult.code);
+    }
+
     const updateResponse = await fetch(
       `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}?organization_id=${organizationId}`,
       {
         method: 'PUT',
         headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(zohoInvoiceData),
+        body: JSON.stringify(baseInvoiceData),
       }
     );
     const updateResult = await updateResponse.json();
@@ -225,23 +242,24 @@ async function syncInvoiceToZoho(
       console.log('Zoho invoice updated:', updateResult.invoice.invoice_id);
       return updateResult.invoice.invoice_id;
     }
-    // If Zoho returns a "Invoice does not exist" error, fall through to create a new one
+    // If Zoho returns "Invoice does not exist", fall through to create a new one
     if (updateResult.code === 1002 || updateResult.code === 5) {
       console.warn('Zoho invoice not found by ID, creating new one instead');
     } else {
-      console.error('Failed to update invoice in Zoho:', updateResult);
-      throw new Error(updateResult.message || 'Failed to update invoice in Zoho');
+      console.error('Failed to update invoice in Zoho:', JSON.stringify(updateResult));
+      throw new Error(updateResult.message || `Zoho PUT failed (code ${updateResult.code})`);
     }
   }
 
-  // CREATE new invoice in Zoho
+  // CREATE new invoice in Zoho (include invoice_number only on create)
   console.log('Creating new Zoho invoice');
+  const createPayload = { ...baseInvoiceData, invoice_number: invoice.invoice_number };
   const createResponse = await fetch(
     `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}`,
     {
       method: 'POST',
       headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(zohoInvoiceData),
+      body: JSON.stringify(createPayload),
     }
   );
   const invoiceResult = await createResponse.json();
