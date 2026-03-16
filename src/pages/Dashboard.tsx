@@ -37,6 +37,7 @@ const Dashboard = () => {
 
   const [kpis, setKpis] = useState({
     activeShipments: 0,
+    totalDeliveriesMtd: 0,   // completed (delivered) dispatches this month — mirrors Analytics "Total Deliveries"
     avgTransitDays: 0,       // actual average days in transit (delivered dispatches MTD)
     avgTargetDays: 0,        // average route ETA days (target) for those same dispatches
     fleetUtilizationText: "—",
@@ -56,6 +57,14 @@ const Dashboard = () => {
         .from("dispatches")
         .select("id", { count: "exact", head: true })
         .not("status", "in", "(delivered,cancelled)");
+
+      // Total deliveries MTD (delivered dispatches created this month — mirrors Analytics "Total Deliveries")
+      const { count: deliveredMtdCount } = await supabase
+        .from("dispatches")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "delivered")
+        .neq("is_historical", true)
+        .gte("created_at", start);
 
       // Revenue MTD — use invoice_date for consistent attribution across all screens
       let revenueMtd = 0;
@@ -139,7 +148,7 @@ const Dashboard = () => {
           const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
           if (msInTransit < 0) return; // skip bad data
           deliveryCount++;
-          totalTransitDays += Math.ceil(msInTransit / (1000 * 60 * 60 * 24));
+          totalTransitDays += msInTransit / (1000 * 60 * 60 * 24); // fractional days (consistent with Analytics)
           totalTargetDays += routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS;
         }
       });
@@ -173,6 +182,7 @@ const Dashboard = () => {
 
       setKpis({
         activeShipments: activeCount || 0,
+        totalDeliveriesMtd: deliveredMtdCount || 0,
         avgTransitDays,
         avgTargetDays,
         fleetUtilizationText,
@@ -189,9 +199,9 @@ const Dashboard = () => {
     () => {
       const allMetrics = [
         {
-          title: "Active Shipments",
-          value: String(kpis.activeShipments),
-          change: "Live",
+          title: "Total Deliveries (MTD)",
+          value: String(kpis.totalDeliveriesMtd),
+          change: `${kpis.activeShipments} active now`,
           changeType: "neutral" as const,
           icon: Package,
           link: "/dispatch",

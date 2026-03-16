@@ -654,7 +654,7 @@ const InvoicesPage = () => {
     setIsEditDialogOpen(true);
   };
 
-  const handleUpdate = async () => {
+  const handleUpdate = async (syncAfter = false) => {
     if (!editingInvoice) return;
 
     if (!formData.customer_id) {
@@ -704,7 +704,33 @@ const InvoicesPage = () => {
         new_data: updateData,
       });
 
-      toast({ title: "Success", description: "Invoice updated successfully" });
+      // If invoice was previously synced to Zoho, resync automatically.
+      // If user explicitly clicked "Save & Sync", sync regardless.
+      const shouldSync = syncAfter || !!editingInvoice.zoho_invoice_id;
+      if (shouldSync) {
+        try {
+          const { data: syncData, error: syncError } = await supabase.functions.invoke('zoho-sync', {
+            body: { action: 'sync_invoice', invoiceId: editingInvoice.id },
+          });
+          if (syncError) throw syncError;
+          toast({
+            title: "Saved & Synced to Zoho",
+            description: syncData?.success
+              ? "Invoice updated and resynced to Zoho successfully"
+              : "Invoice saved. Zoho sync returned unexpected response.",
+          });
+        } catch (syncErr: any) {
+          // Save succeeded — don't block the user, just warn about sync
+          toast({
+            title: "Saved (Zoho sync failed)",
+            description: syncErr.message || "Invoice saved but Zoho resync failed. You can retry from the invoice menu.",
+            variant: "destructive",
+          });
+        }
+      } else {
+        toast({ title: "Invoice updated", description: "Changes saved. Not yet synced to Zoho." });
+      }
+
       setIsEditDialogOpen(false);
       setEditingInvoice(null);
       resetForm();
@@ -2286,13 +2312,30 @@ const InvoicesPage = () => {
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-3 p-4 border-t border-border/50 bg-background shrink-0">
-            <Button variant="outline" onClick={() => { setIsEditDialogOpen(false); setEditingInvoice(null); resetForm(); }}>
-              Cancel
-            </Button>
-            <Button onClick={handleUpdate} disabled={saving} className="bg-primary hover:bg-primary/90">
-              {saving ? "Saving..." : "Save Changes"}
-            </Button>
+          <div className="flex items-center justify-between gap-3 p-4 border-t border-border/50 bg-background shrink-0">
+            <div className="text-xs text-muted-foreground">
+              {editingInvoice?.zoho_invoice_id
+                ? "Previously synced — will resync to Zoho on save"
+                : "Not yet synced to Zoho"}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => { setIsEditDialogOpen(false); setEditingInvoice(null); resetForm(); }}>
+                Cancel
+              </Button>
+              {!editingInvoice?.zoho_invoice_id && (
+                <Button
+                  variant="outline"
+                  onClick={() => handleUpdate(true)}
+                  disabled={saving || syncing}
+                  className="border-primary text-primary hover:bg-primary/10"
+                >
+                  {saving ? "Saving..." : "Save & Sync to Zoho"}
+                </Button>
+              )}
+              <Button onClick={() => handleUpdate(false)} disabled={saving} className="bg-primary hover:bg-primary/90">
+                {saving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

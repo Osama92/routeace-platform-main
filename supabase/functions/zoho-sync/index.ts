@@ -88,126 +88,122 @@ function parseLineItemsFromNotes(notes: string | null): Array<{
   return parsed;
 }
 
+async function resolveZohoCustomerId(
+  accessToken: string,
+  organizationId: string,
+  customerName: string
+): Promise<string | null> {
+  const customersResponse = await fetch(
+    `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name_contains=${encodeURIComponent(customerName)}`,
+    { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
+  );
+  const customersData = await customersResponse.json();
+  if (customersData.contacts && customersData.contacts.length > 0) {
+    return customersData.contacts[0].contact_id;
+  }
+  // Create customer in Zoho
+  const createCustomerResponse = await fetch(
+    `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}`,
+    {
+      method: 'POST',
+      headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contact_name: customerName, contact_type: 'customer' }),
+    }
+  );
+  const createCustomerData = await createCustomerResponse.json();
+  const id = createCustomerData.contact?.contact_id;
+  if (!id) console.error('Failed to create customer in Zoho:', createCustomerData);
+  return id || null;
+}
+
+function buildZohoLineItems(invoice: any): any[] {
+  const parsedItems = parseLineItemsFromNotes(invoice.notes);
+  if (parsedItems.length > 0) {
+    return parsedItems.flatMap(item => {
+      const itemName = item.location ? `${item.description} (${item.location})` : item.description;
+      const lines: any[] = [{
+        name: itemName,
+        description: item.tonnage ? `Tonnage: ${item.tonnage}T` : undefined,
+        quantity: item.quantity,
+        rate: item.price,
+      }];
+      if (item.serviceCharge > 0) {
+        lines.push({ name: `${itemName} - Service Charge`, quantity: 1, rate: item.serviceCharge });
+      }
+      return lines;
+    });
+  }
+  return [{ name: 'Delivery Service', quantity: 1, rate: invoice.amount }];
+}
+
 async function syncInvoiceToZoho(
   accessToken: string,
   organizationId: string,
   invoice: any,
   customerName: string
 ): Promise<string | null> {
-  console.log('Syncing invoice to Zoho:', invoice.invoice_number);
+  console.log('Syncing invoice to Zoho:', invoice.invoice_number, 'existing zoho_id:', invoice.zoho_invoice_id || 'none');
 
-  // First, check if customer exists in Zoho or create one
-  const customersResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name_contains=${encodeURIComponent(customerName)}`,
-    {
-      headers: {
-        'Authorization': `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
+  const zohoCustomerId = await resolveZohoCustomerId(accessToken, organizationId, customerName);
+  if (!zohoCustomerId) return null;
 
-  let zohoCustomerId: string;
-  const customersData = await customersResponse.json();
-
-  if (customersData.contacts && customersData.contacts.length > 0) {
-    zohoCustomerId = customersData.contacts[0].contact_id;
-  } else {
-    // Create customer in Zoho
-    const createCustomerResponse = await fetch(
-      `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Zoho-oauthtoken ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contact_name: customerName,
-          contact_type: 'customer',
-        }),
-      }
-    );
-    const createCustomerData = await createCustomerResponse.json();
-    zohoCustomerId = createCustomerData.contact?.contact_id;
-
-    if (!zohoCustomerId) {
-      console.error('Failed to create customer in Zoho:', createCustomerData);
-      return null;
-    }
-  }
-
-  // Parse individual line items from the notes field
-  const parsedItems = parseLineItemsFromNotes(invoice.notes);
-
-  // Build Zoho line_items array — one entry per line item
-  let zohoLineItems: any[];
-  if (parsedItems.length > 0) {
-    zohoLineItems = parsedItems.flatMap(item => {
-      const lines: any[] = [];
-      // Main line item (price per quantity)
-      const itemName = item.location
-        ? `${item.description} (${item.location})`
-        : item.description;
-      const mainDescription = item.tonnage ? `Tonnage: ${item.tonnage}T` : undefined;
-      lines.push({
-        name: itemName,
-        description: mainDescription,
-        quantity: item.quantity,
-        rate: item.price,
-      });
-      // Service charge as a separate line if present
-      if (item.serviceCharge > 0) {
-        lines.push({
-          name: `${itemName} - Service Charge`,
-          quantity: 1,
-          rate: item.serviceCharge,
-        });
-      }
-      return lines;
-    });
-  } else {
-    // Fallback: single line with the total amount
-    zohoLineItems = [{ name: 'Delivery Service', quantity: 1, rate: invoice.amount }];
-  }
-
-  // Extract user-facing notes (part after \n\nNotes:)
+  const zohoLineItems = buildZohoLineItems(invoice);
   const userNotes = invoice.notes?.includes('\n\nNotes:')
-    ? invoice.notes.split('\n\nNotes:')[1].trim()
-    : '';
+    ? invoice.notes.split('\n\nNotes:')[1].trim() : '';
 
-  // Create invoice in Zoho
   const zohoInvoiceData: any = {
     customer_id: zohoCustomerId,
     invoice_number: invoice.invoice_number,
-    date: invoice.created_at.split('T')[0],
+    date: invoice.invoice_date || invoice.created_at.split('T')[0],
     due_date: invoice.due_date || undefined,
     line_items: zohoLineItems,
     notes: userNotes || undefined,
-    status: invoice.status === 'paid' ? 'paid' : 'draft',
   };
 
-  const createInvoiceResponse = await fetch(
+  // If invoice already exists in Zoho → UPDATE (PUT) it instead of creating a duplicate
+  if (invoice.zoho_invoice_id) {
+    console.log('Updating existing Zoho invoice:', invoice.zoho_invoice_id);
+    const updateResponse = await fetch(
+      `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}?organization_id=${organizationId}`,
+      {
+        method: 'PUT',
+        headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(zohoInvoiceData),
+      }
+    );
+    const updateResult = await updateResponse.json();
+    if (updateResult.invoice?.invoice_id) {
+      console.log('Zoho invoice updated:', updateResult.invoice.invoice_id);
+      return updateResult.invoice.invoice_id;
+    }
+    // If Zoho returns a "Invoice does not exist" error, fall through to create a new one
+    if (updateResult.code === 1002 || updateResult.code === 5) {
+      console.warn('Zoho invoice not found by ID, creating new one instead');
+    } else {
+      console.error('Failed to update invoice in Zoho:', updateResult);
+      throw new Error(updateResult.message || 'Failed to update invoice in Zoho');
+    }
+  }
+
+  // CREATE new invoice in Zoho
+  console.log('Creating new Zoho invoice');
+  const createResponse = await fetch(
     `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}`,
     {
       method: 'POST',
-      headers: {
-        'Authorization': `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(zohoInvoiceData),
     }
   );
+  const invoiceResult = await createResponse.json();
 
-  const invoiceResult = await createInvoiceResponse.json();
-  
   if (invoiceResult.invoice?.invoice_id) {
-    console.log('Invoice synced to Zoho:', invoiceResult.invoice.invoice_id);
+    console.log('Invoice created in Zoho:', invoiceResult.invoice.invoice_id);
     return invoiceResult.invoice.invoice_id;
   }
 
   console.error('Failed to create invoice in Zoho:', invoiceResult);
-  return null;
+  throw new Error(invoiceResult.message || 'Failed to create invoice in Zoho');
 }
 
 // Map RouteAce expense categories to Zoho account names
@@ -461,16 +457,13 @@ serve(async (req) => {
           invoice.customers?.company_name || 'Unknown Customer'
         );
 
-        if (zohoInvoiceId) {
-          await supabase
-            .from('invoices')
-            .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
-            .eq('id', invoiceId);
-          result.zoho_invoice_id = zohoInvoiceId;
-        } else {
-          result.success = false;
-          result.error = 'Failed to sync invoice to Zoho';
-        }
+        if (!zohoInvoiceId) throw new Error('Failed to sync invoice to Zoho');
+        await supabase
+          .from('invoices')
+          .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
+          .eq('id', invoiceId);
+        result.zoho_invoice_id = zohoInvoiceId;
+        result.action = invoice.zoho_invoice_id ? 'updated' : 'created';
         break;
       }
 

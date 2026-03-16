@@ -145,8 +145,8 @@ const AnalyticsPage = () => {
       // Calculate KPIs
       const allDispatches = dispatches || [];
       const deliveredDispatches = allDispatches.filter(d => d.status === "delivered");
-      // Total deliveries = all dispatches created in the period (not just completed ones)
-      const totalDeliveries = allDispatches.length;
+      // Total deliveries = completed (delivered) dispatches in the period
+      const totalDeliveries = deliveredDispatches.length;
 
       // OTD: average actual transit days vs average route target days
       const DEFAULT_ETA_DAYS_KPI = 2;
