@@ -216,6 +216,8 @@ async function syncInvoiceToZoho(
     due_date: invoice.due_date || undefined,
     line_items: zohoLineItems,
     notes: userNotes || undefined,
+    // Required by Zoho when updating a sent invoice
+    reason: 'Invoice updated via RouteAce platform',
   };
 
   // If invoice already exists in Zoho → UPDATE (PUT) it instead of creating a duplicate
@@ -224,18 +226,22 @@ async function syncInvoiceToZoho(
   if (invoice.zoho_invoice_id) {
     console.log('Updating existing Zoho invoice:', invoice.zoho_invoice_id);
 
-    // Zoho rejects PUT on sent/void invoices — convert back to draft first
-    const markDraftResponse = await fetch(
-      `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}/status/draft?organization_id=${organizationId}`,
-      {
-        method: 'POST',
-        headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+    // Zoho rejects PUT on sent/void invoices — try to convert back to draft first
+    try {
+      const markDraftResponse = await fetch(
+        `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}/status/draft?organization_id=${organizationId}`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+        }
+      );
+      const draftText = await markDraftResponse.text();
+      const draftResult = draftText ? JSON.parse(draftText) : {};
+      if (draftResult.code !== 0) {
+        console.warn('Could not mark invoice as draft before update:', draftResult.message || draftResult.code);
       }
-    );
-    const draftResult = await markDraftResponse.json();
-    if (draftResult.code !== 0) {
-      // If it's already draft (code 0) or not found — proceed anyway, PUT may still work
-      console.warn('Could not mark invoice as draft before update:', draftResult.message || draftResult.code);
+    } catch (e) {
+      console.warn('Draft status call failed (non-critical), proceeding with PUT:', e);
     }
 
     const updateResponse = await fetch(
@@ -681,9 +687,11 @@ serve(async (req) => {
     });
   } catch (error: any) {
     console.error('Zoho sync error:', error);
+    // Return 200 so supabase.functions.invoke populates `data` (not `error`),
+    // allowing the frontend to read the actual error message from data.error
     return new Response(
       JSON.stringify({ success: false, error: error.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });

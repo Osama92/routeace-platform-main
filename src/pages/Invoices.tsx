@@ -712,10 +712,14 @@ const InvoicesPage = () => {
           const { data: syncData, error: syncError } = await supabase.functions.invoke('zoho-sync', {
             body: { action: 'sync_invoice', invoiceId: editingInvoice.id },
           });
-          // supabase.functions.invoke sets syncError for non-2xx HTTP, but the real message
-          // is in syncData.error (the JSON body returned by the edge function)
-          const zohoErrMsg = syncData?.error || syncError?.message;
-          if (zohoErrMsg) throw new Error(zohoErrMsg);
+          // When the edge function returns non-2xx, syncData is null and syncError.message
+          // is the generic "Edge Function returned a non-2xx status code".
+          // The real error is in syncError.context (parsed response body from the function).
+          if (syncError) {
+            const detail = (syncError as any).context?.error || (syncError as any).context?.message || syncError.message;
+            throw new Error(detail);
+          }
+          if (syncData?.error) throw new Error(syncData.error);
           toast({
             title: "Saved & Synced to Zoho",
             description: syncData?.action === 'updated'
@@ -837,7 +841,10 @@ const InvoicesPage = () => {
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        const detail = (error as any).context?.error || (error as any).context?.message || error.message;
+        throw new Error(detail);
+      }
 
       if (data.success) {
         toast({
