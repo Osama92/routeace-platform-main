@@ -116,24 +116,72 @@ async function resolveZohoCustomerId(
   return id || null;
 }
 
-function buildZohoLineItems(invoice: any): any[] {
+function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
   const parsedItems = parseLineItemsFromNotes(invoice.notes);
   if (parsedItems.length > 0) {
     return parsedItems.flatMap(item => {
-      const itemName = item.location ? `${item.description} (${item.location})` : item.description;
-      const lines: any[] = [{
+      // Zoho line item: name = item/product name, description = free-text detail shown below item name
+      // We put tonnage in the name so it appears in the item column, and location in description
+      const tonnagePart = item.tonnage ? ` [${item.tonnage}T]` : '';
+      const itemName = `${item.description}${tonnagePart}`;
+      const itemDescription = item.location || undefined;
+
+      const mainLine: any = {
         name: itemName,
-        description: item.tonnage ? `Tonnage: ${item.tonnage}T` : undefined,
+        description: itemDescription,
         quantity: item.quantity,
         rate: item.price,
-      }];
-      if (item.serviceCharge > 0) {
-        lines.push({ name: `${itemName} - Service Charge`, quantity: 1, rate: item.serviceCharge });
+      };
+
+      // Apply VAT on main line item
+      if (vatTaxId && item.vatType !== 'none') {
+        mainLine.tax_id = vatTaxId;
+        mainLine.is_inclusive_tax = item.vatType === 'inclusive';
       }
+
+      const lines: any[] = [mainLine];
+
+      if (item.serviceCharge > 0) {
+        const scLine: any = {
+          name: `${item.description} - Service Charge${tonnagePart}`,
+          description: itemDescription,
+          quantity: 1,
+          rate: item.serviceCharge,
+        };
+        // Apply VAT on service charge line
+        if (vatTaxId && item.serviceChargeVat !== 'none') {
+          scLine.tax_id = vatTaxId;
+          scLine.is_inclusive_tax = item.serviceChargeVat === 'inclusive';
+        }
+        lines.push(scLine);
+      }
+
       return lines;
     });
   }
   return [{ name: 'Delivery Service', quantity: 1, rate: invoice.amount }];
+}
+
+async function resolveVatTaxId(accessToken: string, organizationId: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${ZOHO_BOOKS_URL()}/settings/taxes?organization_id=${organizationId}`, {
+      headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    const taxes: any[] = data.taxes || [];
+    // Look for a 7.5% VAT tax (Nigerian standard VAT)
+    const vat = taxes.find((t: any) => Math.abs(Number(t.tax_percentage) - 7.5) < 0.01)
+      || taxes.find((t: any) => t.tax_name?.toLowerCase().includes('vat'));
+    if (vat) {
+      console.log('Found Zoho VAT tax:', vat.tax_name, vat.tax_id);
+      return vat.tax_id;
+    }
+    console.warn('No VAT tax found in Zoho — line item taxes will be omitted');
+    return undefined;
+  } catch (e) {
+    console.error('Failed to fetch Zoho taxes:', e);
+    return undefined;
+  }
 }
 
 async function syncInvoiceToZoho(
@@ -147,7 +195,8 @@ async function syncInvoiceToZoho(
   const zohoCustomerId = await resolveZohoCustomerId(accessToken, organizationId, customerName);
   if (!zohoCustomerId) return null;
 
-  const zohoLineItems = buildZohoLineItems(invoice);
+  const vatTaxId = await resolveVatTaxId(accessToken, organizationId);
+  const zohoLineItems = buildZohoLineItems(invoice, vatTaxId);
   const userNotes = invoice.notes?.includes('\n\nNotes:')
     ? invoice.notes.split('\n\nNotes:')[1].trim() : '';
 
