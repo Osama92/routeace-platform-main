@@ -145,21 +145,38 @@ const ExpenseApprovalsPage = () => {
 
   const fetchExpenses = async () => {
     try {
-      // Single query — join profiles three times via FK aliases to eliminate N+1
       const { data, error } = await supabase
         .from("expenses")
-        .select(`
-          *,
-          submitter:profiles!expenses_submitted_by_fkey(full_name, email),
-          first_approver:profiles!expenses_first_approver_id_fkey(full_name, email),
-          second_approver:profiles!expenses_second_approver_id_fkey(full_name, email)
-        `)
+        .select("*")
         .not("approval_status", "is", null)
         .neq("approval_status", "draft")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setExpenses((data || []) as Expense[]);
+
+      // Collect all unique user IDs across submitted_by, first_approver_id, second_approver_id
+      const userIds = [...new Set(
+        (data || []).flatMap((e: any) => [e.submitted_by, e.first_approver_id, e.second_approver_id].filter(Boolean))
+      )];
+
+      // Single batch profile lookup — 1 query instead of N*3
+      const profileMap = new Map<string, { full_name: string; email: string }>();
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("user_id, full_name, email")
+          .in("user_id", userIds);
+        (profiles || []).forEach((p: any) => profileMap.set(p.user_id, { full_name: p.full_name, email: p.email }));
+      }
+
+      const enriched: Expense[] = (data || []).map((e: any) => ({
+        ...e,
+        submitter: e.submitted_by ? profileMap.get(e.submitted_by) : undefined,
+        first_approver: e.first_approver_id ? profileMap.get(e.first_approver_id) : undefined,
+        second_approver: e.second_approver_id ? profileMap.get(e.second_approver_id) : undefined,
+      }));
+
+      setExpenses(enriched);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -379,10 +396,7 @@ const ExpenseApprovalsPage = () => {
         {[
           { label: "Pending 1st Approval", value: pendingFirst.length, icon: Clock, color: "bg-warning/10 text-warning" },
           { label: "Pending 2nd Approval", value: pendingSecond.length, icon: AlertCircle, color: "bg-info/10 text-info" },
-          { label: "Approved Today", value: approved.filter(exp => {
-            const approvalDate = exp.second_approved_at || exp.first_approved_at;
-            return approvalDate && new Date(approvalDate).toDateString() === new Date().toDateString();
-          }).length, icon: CheckCircle, color: "bg-success/10 text-success" },
+          { label: "Approved", value: approved.length, icon: CheckCircle, color: "bg-success/10 text-success" },
           { label: "Rejected", value: rejected.length, icon: XCircle, color: "bg-destructive/10 text-destructive" },
         ].map((stat, index) => (
           <motion.div

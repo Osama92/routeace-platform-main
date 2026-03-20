@@ -166,27 +166,37 @@ const InvoiceApprovalsPage = () => {
 
   const fetchInvoices = async () => {
     try {
-      // Single query — join profiles three times via FK aliases to eliminate N+1
       const { data, error } = await supabase
         .from("invoices")
-        .select(`
-          *,
-          customers(company_name),
-          submitter:profiles!invoices_submitted_by_fkey(full_name, email),
-          first_approver:profiles!invoices_first_approver_id_fkey(full_name, email),
-          second_approver:profiles!invoices_second_approver_id_fkey(full_name, email)
-        `)
+        .select("*, customers(company_name)")
         .not("approval_status", "is", null)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
 
-      const normalized = (data || []).map((invoice: any) => ({
-        ...invoice,
-        approval_status: normalizeApprovalStatus(invoice.approval_status),
+      // Collect all unique user IDs — one batch profile lookup instead of N*3
+      const userIds = [...new Set(
+        (data || []).flatMap((inv: any) => [inv.submitted_by, inv.first_approver_id, inv.second_approver_id].filter(Boolean))
+      )];
+
+      const profileMap = new Map<string, { full_name: string; email: string }>();
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("user_id, full_name, email")
+          .in("user_id", userIds);
+        (profiles || []).forEach((p: any) => profileMap.set(p.user_id, { full_name: p.full_name, email: p.email }));
+      }
+
+      const enriched: Invoice[] = (data || []).map((inv: any) => ({
+        ...inv,
+        approval_status: normalizeApprovalStatus(inv.approval_status),
+        submitter: inv.submitted_by ? profileMap.get(inv.submitted_by) : undefined,
+        first_approver: inv.first_approver_id ? profileMap.get(inv.first_approver_id) : undefined,
+        second_approver: inv.second_approver_id ? profileMap.get(inv.second_approver_id) : undefined,
       }));
 
-      setInvoices(normalized);
+      setInvoices(enriched);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -423,10 +433,7 @@ const InvoiceApprovalsPage = () => {
         {[
           { label: "Pending 1st Approval", value: pendingFirst.length, icon: Clock, color: "bg-warning/10 text-warning" },
           { label: "Pending 2nd Approval", value: pendingSecond.length, icon: AlertCircle, color: "bg-info/10 text-info" },
-          { label: "Approved Today", value: approved.filter(inv => {
-            const approvalDate = inv.second_approved_at || inv.first_approved_at;
-            return approvalDate && new Date(approvalDate).toDateString() === new Date().toDateString();
-          }).length, icon: CheckCircle, color: "bg-success/10 text-success" },
+          { label: "Approved", value: approved.length, icon: CheckCircle, color: "bg-success/10 text-success" },
           { label: "Rejected", value: rejected.length, icon: XCircle, color: "bg-destructive/10 text-destructive" },
         ].map((stat, index) => (
           <motion.div
