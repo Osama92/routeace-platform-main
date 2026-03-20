@@ -28,6 +28,8 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
+  Legend,
+  ReferenceLine,
 } from "recharts";
 import { Download, TrendingUp, TrendingDown, DollarSign, Package, FileText, ArrowRight } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -43,6 +45,8 @@ interface MonthlyPL {
   grossProfit: number;
   expenses: number;
   netProfit: number;
+  revenueTarget: number;
+  netProfitTarget: number;
 }
 
 interface ExpenseBreakdown {
@@ -148,11 +152,31 @@ const ProfitLossPage = () => {
           .sort((a, b) => b.amount - a.amount)
       );
 
-      // Fetch monthly trend (last 6 months)
+      // Fetch monthly trend (last 6 months) + targets
+      const now = new Date();
+      const targetMonths = Array.from({ length: 6 }, (_, i) => {
+        const d = subMonths(now, 5 - i);
+        return { year: d.getFullYear(), month: d.getMonth() + 1 };
+      });
+      const { data: targetsData } = await supabase
+        .from("financial_targets")
+        .select("target_year, target_month, revenue_target, profit_target")
+        .eq("target_type", "monthly")
+        .in("target_year", [...new Set(targetMonths.map(t => t.year))])
+        .in("target_month", [...new Set(targetMonths.map(t => t.month))]);
+
+      const targetMap = new Map<string, { revenueTarget: number; profitTarget: number }>();
+      (targetsData || []).forEach((t: any) => {
+        targetMap.set(`${t.target_year}-${t.target_month}`, {
+          revenueTarget: Number(t.revenue_target || 0),
+          profitTarget: Number(t.profit_target || 0),
+        });
+      });
+
       const monthlyPL: MonthlyPL[] = [];
       for (let i = 5; i >= 0; i--) {
-        const monthStart = startOfMonth(subMonths(new Date(), i));
-        const monthEnd = endOfMonth(subMonths(new Date(), i));
+        const monthStart = startOfMonth(subMonths(now, i));
+        const monthEnd = endOfMonth(subMonths(now, i));
 
         const { data: monthInvoices } = await supabase
           .from("invoices")
@@ -171,6 +195,8 @@ const ProfitLossPage = () => {
         const monthOpex = (monthExpenses || []).filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
         const monthGrossProfit = monthRevenue - monthCogs;
         const monthNetProfit = monthGrossProfit - monthOpex;
+        const targetKey = `${monthStart.getFullYear()}-${monthStart.getMonth() + 1}`;
+        const target = targetMap.get(targetKey);
 
         monthlyPL.push({
           month: format(monthStart, "MMM"),
@@ -179,6 +205,8 @@ const ProfitLossPage = () => {
           grossProfit: monthGrossProfit,
           expenses: monthOpex,
           netProfit: monthNetProfit,
+          revenueTarget: target?.revenueTarget || 0,
+          netProfitTarget: target?.profitTarget || 0,
         });
       }
       setMonthlyData(monthlyPL);
@@ -413,11 +441,11 @@ const ProfitLossPage = () => {
       >
         <Card className="glass-card border-border/50">
           <CardHeader>
-            <CardTitle className="text-sm font-heading">6-Month P&L Trend</CardTitle>
+            <CardTitle className="text-sm font-heading">6-Month P&L Trend vs Targets</CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={monthlyData}>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={monthlyData} barCategoryGap="20%" barGap={2}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="month" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
                 <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} tickFormatter={formatCompact} />
@@ -427,16 +455,26 @@ const ProfitLossPage = () => {
                     borderColor: "hsl(var(--border))",
                     borderRadius: "8px",
                   }}
-                  formatter={(value: number) => formatCurrency(value)}
+                  formatter={(value: number, name: string) => [formatCurrency(value), name]}
                 />
-                <Bar dataKey="revenue" name="Revenue" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="netProfit" name="Net Profit" radius={[4, 4, 0, 0]}>
+                <Legend
+                  wrapperStyle={{ fontSize: "12px", paddingTop: "12px" }}
+                  formatter={(value) => <span style={{ color: "hsl(var(--muted-foreground))" }}>{value}</span>}
+                />
+                <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                <Bar dataKey="revenue" name="Revenue (Actual)" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="revenueTarget" name="Revenue (Target)" fill="hsl(var(--success) / 0.3)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="netProfit" name="Net Profit (Actual)" radius={[4, 4, 0, 0]}>
                   {monthlyData.map((entry, index) => (
                     <Cell key={index} fill={entry.netProfit >= 0 ? "hsl(var(--primary))" : "hsl(var(--destructive))"} />
                   ))}
                 </Bar>
+                <Bar dataKey="netProfitTarget" name="Net Profit (Target)" fill="hsl(var(--primary) / 0.25)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+            {monthlyData.every(m => m.revenueTarget === 0) && (
+              <p className="text-xs text-muted-foreground text-center mt-2">No targets set yet — configure them in Target Settings</p>
+            )}
           </CardContent>
         </Card>
       </motion.div>

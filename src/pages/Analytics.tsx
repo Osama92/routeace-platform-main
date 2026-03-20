@@ -28,6 +28,14 @@ import {
   MapPin,
   Download,
   CalendarRange,
+  ChevronDown,
+  ChevronUp,
+  User,
+  Building2,
+  Tag,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -67,7 +75,16 @@ const AnalyticsPage = () => {
   const [deliveryData, setDeliveryData] = useState<any[]>([]);
   const [revenueData, setRevenueData] = useState<any[]>([]);
   const [fleetUtilization, setFleetUtilization] = useState<any[]>([]);
-  const [delayReasons, setDelayReasons] = useState<{ reason: string; count: number }[]>([]);
+  const [delayReasons, setDelayReasons] = useState<{
+    reason: string;
+    count: number;
+    dispatches: { id: string; dispatch_number: string; truck: string; customer: string; driver: string; vendor: string | null }[];
+  }[]>([]);
+  const [expandedDelayReason, setExpandedDelayReason] = useState<string | null>(null);
+  const [editingVendor, setEditingVendor] = useState<{ dispatchId: string; value: string } | null>(null);
+  const [idleFleet, setIdleFleet] = useState<{ id: string; registration: string; truck_type: string | null; status: string; idleReason: string }[]>([]);
+  const [totalFleetCount, setTotalFleetCount] = useState(0);
+  const [editingIdleReason, setEditingIdleReason] = useState<{ vehicleId: string; value: string } | null>(null);
   const [topRoutes, setTopRoutes] = useState<any[]>([]);
   const [driverPerformance, setDriverPerformance] = useState<any[]>([]);
 
@@ -108,7 +125,7 @@ const AnalyticsPage = () => {
       // Fetch dispatches in date range — exclude historical (same logic as Dispatch page date filter)
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, delay_reason, routes:route_id(estimated_duration_hours)")
+        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, delay_reason, dispatch_number, vendor_delay_note, routes:route_id(estimated_duration_hours), vehicles:vehicle_id(registration_number, truck_type), customers:customer_id(company_name), drivers:driver_id(full_name)")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
         .or("is_historical.is.null,is_historical.eq.false");
@@ -123,7 +140,7 @@ const AnalyticsPage = () => {
       // Fetch vehicles for fleet utilization (current snapshot is fine — status is live)
       const { data: vehicles } = await supabase
         .from("vehicles")
-        .select("id, status");
+        .select("id, status, registration_number, truck_type, idle_reason");
 
       // Fetch dispatches with driver info for period-specific driver performance (exclude historical)
       const { data: driverDispatches } = await supabase
@@ -228,7 +245,7 @@ const AnalyticsPage = () => {
         { name: "Inactive", value: Math.round((statusCounts.inactive / totalVehicles) * 100), color: "hsl(222, 30%, 18%)" },
       ]);
 
-      // Delay reasons breakdown — from delivered dispatches that have a delay_reason set
+      // Delay reasons breakdown — from dispatches that have a delay_reason set
       const delayReasonLabels: Record<string, string> = {
         traffic: "Traffic congestion",
         vehicle_breakdown: "Vehicle breakdown",
@@ -237,21 +254,49 @@ const AnalyticsPage = () => {
         wrong_address: "Wrong address",
         weather: "Weather",
         security: "Security / roadblock",
-        loading_delay: "Loading delay",
+        loading_delay: "Offloading/Loading delay",
         driver_issue: "Driver issue",
         other: "Other",
       };
-      const reasonMap: Record<string, number> = {};
+      const reasonMap: Record<string, { count: number; dispatches: any[] }> = {};
       dispatches?.forEach((d: any) => {
         if (d.delay_reason && d.delay_reason !== "none") {
           const label = delayReasonLabels[d.delay_reason] || d.delay_reason;
-          reasonMap[label] = (reasonMap[label] || 0) + 1;
+          if (!reasonMap[label]) reasonMap[label] = { count: 0, dispatches: [] };
+          reasonMap[label].count++;
+          const vehicleInfo = Array.isArray(d.vehicles) ? d.vehicles[0] : d.vehicles;
+          const customerInfo = Array.isArray(d.customers) ? d.customers[0] : d.customers;
+          const driverInfo = Array.isArray(d.drivers) ? d.drivers[0] : d.drivers;
+          reasonMap[label].dispatches.push({
+            id: d.id,
+            dispatch_number: d.dispatch_number || d.id.slice(0, 8),
+            truck: vehicleInfo?.registration_number || "—",
+            customer: customerInfo?.company_name || "—",
+            driver: driverInfo?.full_name || "—",
+            vendor: d.vendor_delay_note || null,
+          });
         }
       });
       const delayReasonData = Object.entries(reasonMap)
-        .map(([reason, count]) => ({ reason, count }))
-        .sort((a, b) => b.count - a.count);
+        .map(([reason, data]) => ({ reason, count: data.count, dispatches: data.dispatches }))
+        .sort((a, b) => {
+          // Offloading/Loading delay always sorts first among same-count ties
+          if (a.reason === "Offloading/Loading delay" && b.reason !== "Offloading/Loading delay") return -1;
+          if (b.reason === "Offloading/Loading delay" && a.reason !== "Offloading/Loading delay") return 1;
+          return b.count - a.count;
+        });
       setDelayReasons(delayReasonData);
+
+      // Idle fleet — vehicles not active in the period
+      const idleVehicles = (vehicles || []).filter(v => !activeVehicleIds.has(v.id));
+      setTotalFleetCount(vehicles?.length || 0);
+      setIdleFleet(idleVehicles.map((v: any) => ({
+        id: v.id,
+        registration: v.registration_number || "Unknown",
+        truck_type: v.truck_type || null,
+        status: v.status || "available",
+        idleReason: v.idle_reason || "",
+      })));
 
       // Top routes by frequency
       const routeMap = new Map<string, { trips: number; distance: number; revenue: number }>();
@@ -371,6 +416,21 @@ const AnalyticsPage = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveVendorNote = async (dispatchId: string, note: string) => {
+    await supabase.from("dispatches").update({ vendor_delay_note: note }).eq("id", dispatchId);
+    setDelayReasons(prev => prev.map(r => ({
+      ...r,
+      dispatches: r.dispatches.map(d => d.id === dispatchId ? { ...d, vendor: note || null } : d),
+    })));
+    setEditingVendor(null);
+  };
+
+  const saveIdleReason = async (vehicleId: string, reason: string) => {
+    await supabase.from("vehicles").update({ idle_reason: reason } as any).eq("id", vehicleId);
+    setIdleFleet(prev => prev.map(v => v.id === vehicleId ? { ...v, idleReason: reason } : v));
+    setEditingIdleReason(null);
   };
 
   const handleExportReport = async () => {
@@ -722,7 +782,7 @@ const AnalyticsPage = () => {
           <h3 className="font-heading font-semibold text-lg text-foreground mb-1">
             Delivery Delay Reasons
           </h3>
-          <p className="text-xs text-muted-foreground mb-4">From delayed deliveries in selected period</p>
+          <p className="text-xs text-muted-foreground mb-4">Click a reason to see linked trucks, customers & drivers. Tag impacting vendor inline.</p>
           {delayReasons.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
               <Clock className="w-8 h-8 mb-2 opacity-30" />
@@ -734,20 +794,80 @@ const AnalyticsPage = () => {
                 const total = delayReasons.reduce((s, r) => s + r.count, 0);
                 return delayReasons.map((item, index) => {
                   const pct = Math.round((item.count / total) * 100);
+                  const isExpanded = expandedDelayReason === item.reason;
                   return (
                     <div key={index} className="space-y-1">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-foreground">{item.reason}</span>
-                        <span className="font-semibold text-warning">
-                          {pct}% <span className="text-xs text-muted-foreground font-normal">({item.count} trip{item.count > 1 ? "s" : ""})</span>
-                        </span>
-                      </div>
-                      <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-warning rounded-full transition-all duration-500"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
+                      <button
+                        className="w-full text-left"
+                        onClick={() => setExpandedDelayReason(isExpanded ? null : item.reason)}
+                      >
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-foreground flex items-center gap-1">
+                            {item.reason}
+                            {isExpanded ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+                          </span>
+                          <span className="font-semibold text-warning">
+                            {pct}% <span className="text-xs text-muted-foreground font-normal">({item.count} trip{item.count > 1 ? "s" : ""})</span>
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-secondary rounded-full overflow-hidden mt-1">
+                          <div
+                            className="h-full bg-warning rounded-full transition-all duration-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </button>
+                      {isExpanded && (
+                        <div className="mt-2 rounded-lg border border-border/50 overflow-hidden">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-secondary/60 text-muted-foreground">
+                                <th className="text-left px-3 py-2 font-medium">Dispatch</th>
+                                <th className="text-left px-3 py-2 font-medium"><Truck className="inline w-3 h-3 mr-1" />Truck</th>
+                                <th className="text-left px-3 py-2 font-medium"><Building2 className="inline w-3 h-3 mr-1" />Customer</th>
+                                <th className="text-left px-3 py-2 font-medium"><User className="inline w-3 h-3 mr-1" />Driver</th>
+                                <th className="text-left px-3 py-2 font-medium"><Tag className="inline w-3 h-3 mr-1" />Vendor Note</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {item.dispatches.map((d) => (
+                                <tr key={d.id} className="border-t border-border/30 hover:bg-secondary/30">
+                                  <td className="px-3 py-2 text-foreground font-mono">{d.dispatch_number}</td>
+                                  <td className="px-3 py-2 text-foreground">{d.truck}</td>
+                                  <td className="px-3 py-2 text-foreground">{d.customer}</td>
+                                  <td className="px-3 py-2 text-foreground">{d.driver}</td>
+                                  <td className="px-3 py-2">
+                                    {editingVendor?.dispatchId === d.id ? (
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          className="flex-1 bg-background border border-border rounded px-2 py-0.5 text-xs text-foreground min-w-0"
+                                          value={editingVendor.value}
+                                          autoFocus
+                                          onChange={e => setEditingVendor({ dispatchId: d.id, value: e.target.value })}
+                                          onKeyDown={e => {
+                                            if (e.key === "Enter") saveVendorNote(d.id, editingVendor.value);
+                                            if (e.key === "Escape") setEditingVendor(null);
+                                          }}
+                                        />
+                                        <button onClick={() => saveVendorNote(d.id, editingVendor.value)} className="text-success hover:opacity-80"><Check className="w-3 h-3" /></button>
+                                        <button onClick={() => setEditingVendor(null)} className="text-destructive hover:opacity-80"><X className="w-3 h-3" /></button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        className="flex items-center gap-1 text-muted-foreground hover:text-foreground group"
+                                        onClick={() => setEditingVendor({ dispatchId: d.id, value: d.vendor || "" })}
+                                      >
+                                        <span>{d.vendor || <span className="italic opacity-50">Add vendor</span>}</span>
+                                        <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   );
                 });
@@ -940,6 +1060,87 @@ const AnalyticsPage = () => {
             </tbody>
           </table>
         </div>
+      </motion.div>
+
+      {/* Idle Fleet Tracker */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.45 }}
+        className="glass-card p-6 mt-6"
+      >
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-heading font-semibold text-lg text-foreground">Idle Fleet Tracker</h3>
+          <Badge className="bg-destructive/15 text-destructive">
+            {idleFleet.length} idle of {totalFleetCount} trucks ({totalFleetCount > 0 ? Math.round((idleFleet.length / totalFleetCount) * 100) : 0}% idle)
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">Trucks with no dispatch activity in selected period. Record reason for idleness below.</p>
+        {idleFleet.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-24 text-muted-foreground">
+            <Truck className="w-8 h-8 mb-2 opacity-30" />
+            <p className="text-sm">All registered trucks were active in this period</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/50 text-muted-foreground text-xs">
+                  <th className="text-left py-2 px-3 font-medium">Registration</th>
+                  <th className="text-left py-2 px-3 font-medium">Type</th>
+                  <th className="text-left py-2 px-3 font-medium">Status</th>
+                  <th className="text-left py-2 px-3 font-medium">Reason for Idleness</th>
+                </tr>
+              </thead>
+              <tbody>
+                {idleFleet.map((v) => (
+                  <tr key={v.id} className="border-t border-border/30 hover:bg-secondary/20">
+                    <td className="py-2 px-3 font-mono font-medium text-foreground">{v.registration}</td>
+                    <td className="py-2 px-3 text-muted-foreground">{v.truck_type || "—"}</td>
+                    <td className="py-2 px-3">
+                      <Badge className={
+                        v.status === "maintenance" ? "bg-warning/15 text-warning" :
+                        v.status === "inactive" ? "bg-secondary text-muted-foreground" :
+                        "bg-muted/30 text-muted-foreground"
+                      }>
+                        {v.status}
+                      </Badge>
+                    </td>
+                    <td className="py-2 px-3">
+                      {editingIdleReason?.vehicleId === v.id ? (
+                        <div className="flex items-center gap-1">
+                          <select
+                            className="flex-1 bg-background border border-border rounded px-2 py-1 text-xs text-foreground"
+                            value={editingIdleReason.value}
+                            onChange={e => setEditingIdleReason({ vehicleId: v.id, value: e.target.value })}
+                          >
+                            <option value="">Select reason...</option>
+                            <option value="Low orders">Low orders</option>
+                            <option value="Partner-related">Partner-related</option>
+                            <option value="Driver unavailable">Driver unavailable</option>
+                            <option value="Awaiting maintenance">Awaiting maintenance</option>
+                            <option value="Customer delay">Customer delay</option>
+                            <option value="Other">Other</option>
+                          </select>
+                          <button onClick={() => saveIdleReason(v.id, editingIdleReason.value)} className="text-success hover:opacity-80"><Check className="w-3 h-3" /></button>
+                          <button onClick={() => setEditingIdleReason(null)} className="text-destructive hover:opacity-80"><X className="w-3 h-3" /></button>
+                        </div>
+                      ) : (
+                        <button
+                          className="flex items-center gap-1 text-muted-foreground hover:text-foreground group"
+                          onClick={() => setEditingIdleReason({ vehicleId: v.id, value: v.idleReason })}
+                        >
+                          <span>{v.idleReason || <span className="italic opacity-50">Set reason</span>}</span>
+                          <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </motion.div>
     </DashboardLayout>
   );
