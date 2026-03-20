@@ -166,60 +166,27 @@ const InvoiceApprovalsPage = () => {
 
   const fetchInvoices = async () => {
     try {
-      // Fetch invoices with customer and approver info
+      // Single query — join profiles three times via FK aliases to eliminate N+1
       const { data, error } = await supabase
         .from("invoices")
         .select(`
           *,
-          customers(company_name)
+          customers(company_name),
+          submitter:profiles!invoices_submitted_by_fkey(full_name, email),
+          first_approver:profiles!invoices_first_approver_id_fkey(full_name, email),
+          second_approver:profiles!invoices_second_approver_id_fkey(full_name, email)
         `)
         .not("approval_status", "is", null)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
 
-      // Fetch approver profiles separately for each invoice that has approvers
-      const invoicesWithApprovers = await Promise.all(
-        (data || []).map(async (invoice) => {
-          const result: Invoice = { ...invoice };
+      const normalized = (data || []).map((invoice: any) => ({
+        ...invoice,
+        approval_status: normalizeApprovalStatus(invoice.approval_status),
+      }));
 
-          // Fetch submitter info
-          if (invoice.submitted_by) {
-            const { data: submitter } = await supabase
-              .from("profiles")
-              .select("full_name, email")
-              .eq("user_id", invoice.submitted_by)
-              .single();
-            if (submitter) result.submitter = submitter;
-          }
-
-          // Fetch first approver info
-          if (invoice.first_approver_id) {
-            const { data: firstApprover } = await supabase
-              .from("profiles")
-              .select("full_name, email")
-              .eq("user_id", invoice.first_approver_id)
-              .single();
-            if (firstApprover) result.first_approver = firstApprover;
-          }
-
-          // Fetch second approver info
-          if (invoice.second_approver_id) {
-            const { data: secondApprover } = await supabase
-              .from("profiles")
-              .select("full_name, email")
-              .eq("user_id", invoice.second_approver_id)
-              .single();
-            if (secondApprover) result.second_approver = secondApprover;
-          }
-
-          // Normalize approval_status to canonical value
-          result.approval_status = normalizeApprovalStatus(result.approval_status);
-          return result;
-        })
-      );
-
-      setInvoices(invoicesWithApprovers);
+      setInvoices(normalized);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -233,6 +200,16 @@ const InvoiceApprovalsPage = () => {
 
   useEffect(() => {
     fetchInvoices();
+
+    // Realtime: auto-refresh when any invoice approval_status changes
+    const channel = supabase
+      .channel("invoice-approvals-page")
+      .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, () => {
+        fetchInvoices();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
 
   const sendApprovalNotification = async (invoiceId: string, action: "first_approval" | "second_approval" | "rejected", rejectionReason?: string) => {

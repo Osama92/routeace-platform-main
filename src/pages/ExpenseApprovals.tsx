@@ -145,51 +145,21 @@ const ExpenseApprovalsPage = () => {
 
   const fetchExpenses = async () => {
     try {
+      // Single query — join profiles three times via FK aliases to eliminate N+1
       const { data, error } = await supabase
         .from("expenses")
-        .select("*")
+        .select(`
+          *,
+          submitter:profiles!expenses_submitted_by_fkey(full_name, email),
+          first_approver:profiles!expenses_first_approver_id_fkey(full_name, email),
+          second_approver:profiles!expenses_second_approver_id_fkey(full_name, email)
+        `)
         .not("approval_status", "is", null)
         .neq("approval_status", "draft")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-
-      const expensesWithApprovers = await Promise.all(
-        (data || []).map(async (expense: any) => {
-          const result: Expense = { ...expense };
-
-          if (expense.submitted_by) {
-            const { data: submitter } = await supabase
-              .from("profiles")
-              .select("full_name, email")
-              .eq("user_id", expense.submitted_by)
-              .single();
-            if (submitter) result.submitter = submitter;
-          }
-
-          if (expense.first_approver_id) {
-            const { data: firstApprover } = await supabase
-              .from("profiles")
-              .select("full_name, email")
-              .eq("user_id", expense.first_approver_id)
-              .single();
-            if (firstApprover) result.first_approver = firstApprover;
-          }
-
-          if (expense.second_approver_id) {
-            const { data: secondApprover } = await supabase
-              .from("profiles")
-              .select("full_name, email")
-              .eq("user_id", expense.second_approver_id)
-              .single();
-            if (secondApprover) result.second_approver = secondApprover;
-          }
-
-          return result;
-        })
-      );
-
-      setExpenses(expensesWithApprovers);
+      setExpenses((data || []) as Expense[]);
     } catch (error: any) {
       toast({
         title: "Error",
@@ -203,13 +173,11 @@ const ExpenseApprovalsPage = () => {
 
   const fetchUserApprovalRoles = async () => {
     if (!user?.id) return;
-
     try {
       const { data, error } = await supabase
         .from("approval_roles")
         .select("user_id, approval_level")
         .eq("user_id", user.id);
-
       if (error) throw error;
       setUserApprovalRoles(data || []);
     } catch (error) {
@@ -220,6 +188,16 @@ const ExpenseApprovalsPage = () => {
   useEffect(() => {
     fetchExpenses();
     fetchUserApprovalRoles();
+
+    // Realtime: auto-refresh when any expense approval_status changes
+    const channel = supabase
+      .channel("expense-approvals-page")
+      .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => {
+        fetchExpenses();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
 
   const sendApprovalNotification = async (expenseId: string, action: "first_approval" | "second_approval" | "rejected", reason?: string) => {

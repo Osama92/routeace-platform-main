@@ -40,9 +40,9 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  LineChart,
-  Line,
   Legend,
+  ReferenceLine,
+  Cell,
 } from "recharts";
 import {
   TrendingUp,
@@ -205,36 +205,72 @@ const AdminAnalytics = () => {
         netMargin,
       });
 
-      // Calculate monthly P&L for chart
-      const monthlyData: Record<string, any> = {};
-      
-      invoices?.forEach(inv => {
-        const date = new Date(inv.invoice_date);
-        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        if (!monthlyData[key]) {
-          monthlyData[key] = { month: key, revenue: 0, cogs: 0, opex: 0, profit: 0 };
-        }
-        monthlyData[key].revenue += Number(inv.total_amount);
+      // Build monthly chart data: always last 6 months regardless of period picker
+      const now = new Date();
+      const last6Months = Array.from({ length: 6 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+        return {
+          key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+          label: d.toLocaleString('default', { month: 'short', year: '2-digit' }),
+          year: d.getFullYear(),
+          month: d.getMonth() + 1,
+        };
       });
 
-      expenses?.forEach(exp => {
-        const date = new Date(exp.expense_date);
-        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        if (!monthlyData[key]) {
-          monthlyData[key] = { month: key, revenue: 0, cogs: 0, opex: 0, profit: 0 };
-        }
-        if (exp.is_cogs) {
-          monthlyData[key].cogs += Number(exp.amount);
-        } else {
-          monthlyData[key].opex += Number(exp.amount);
+      // Fetch invoices and expenses for the full 6-month window
+      const chartStart = `${last6Months[0].year}-${String(last6Months[0].month).padStart(2, '0')}-01`;
+      const lastM = last6Months[5];
+      const lastDay6 = new Date(lastM.year, lastM.month, 0).getDate();
+      const chartEnd = `${lastM.year}-${String(lastM.month).padStart(2, '0')}-${lastDay6}`;
+
+      const [{ data: chartInvoices }, { data: chartExpenses }] = await Promise.all([
+        supabase.from("invoices").select("total_amount, invoice_date").gte("invoice_date", chartStart).lte("invoice_date", chartEnd),
+        supabase.from("expenses").select("amount, is_cogs, expense_date").gte("expense_date", chartStart).lte("expense_date", chartEnd),
+      ]);
+
+      // Also fetch approved targets for those 6 months
+      const { data: chartTargets } = await supabase
+        .from("financial_targets")
+        .select("target_year, target_month, revenue_target, profit_target")
+        .eq("target_type", "monthly")
+        .in("target_year", [...new Set(last6Months.map(m => m.year))])
+        .in("target_month", [...new Set(last6Months.map(m => m.month))]);
+
+      const targetMap: Record<string, { revTarget: number; profitTarget: number }> = {};
+      (chartTargets || []).forEach((t: any) => {
+        const k = `${t.target_year}-${String(t.target_month).padStart(2, '0')}`;
+        targetMap[k] = { revTarget: Number(t.revenue_target || 0), profitTarget: Number(t.profit_target || 0) };
+      });
+
+      const buckets: Record<string, { revenue: number; cogs: number; opex: number }> = {};
+      last6Months.forEach(m => { buckets[m.key] = { revenue: 0, cogs: 0, opex: 0 }; });
+
+      (chartInvoices || []).forEach((inv: any) => {
+        const k = inv.invoice_date?.slice(0, 7);
+        if (buckets[k]) buckets[k].revenue += Number(inv.total_amount);
+      });
+      (chartExpenses || []).forEach((exp: any) => {
+        const k = exp.expense_date?.slice(0, 7);
+        if (buckets[k]) {
+          if (exp.is_cogs) buckets[k].cogs += Number(exp.amount);
+          else buckets[k].opex += Number(exp.amount);
         }
       });
 
-      Object.values(monthlyData).forEach((m: any) => {
-        m.profit = m.revenue - m.cogs - m.opex;
+      const chartData = last6Months.map(m => {
+        const b = buckets[m.key];
+        const t = targetMap[m.key] || { revTarget: 0, profitTarget: 0 };
+        return {
+          month: m.label,
+          revenue: Math.round(b.revenue),
+          cogs: Math.round(b.cogs),
+          profit: Math.round(b.revenue - b.cogs - b.opex),
+          revenueTarget: t.revTarget,
+          profitTarget: t.profitTarget,
+        };
       });
 
-      setMonthlyPnl(Object.values(monthlyData).sort((a: any, b: any) => a.month.localeCompare(b.month)));
+      setMonthlyPnl(chartData);
 
     } catch (error: any) {
       console.error('Error fetching P&L data:', error);
@@ -734,21 +770,43 @@ const AdminAnalytics = () => {
           {/* Monthly Trend Chart */}
           <Card className="glass-card border-border/50">
             <CardHeader>
-              <CardTitle className="font-heading">Monthly Performance Trend</CardTitle>
+              <CardTitle className="font-heading">Monthly Performance Trend vs Targets (Last 6 Months)</CardTitle>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={monthlyPnl}>
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={monthlyPnl} barCategoryGap="18%" barGap={2}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="month" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-                  <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }} />
-                  <Tooltip contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px" }} />
-                  <Legend />
-                  <Line type="monotone" dataKey="revenue" stroke="hsl(var(--success))" name="Revenue" strokeWidth={2} />
-                  <Line type="monotone" dataKey="cogs" stroke="hsl(var(--warning))" name="COGS" strokeWidth={2} />
-                  <Line type="monotone" dataKey="profit" stroke="hsl(var(--primary))" name="Net Profit" strokeWidth={2} />
-                </LineChart>
+                  <YAxis
+                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                    tickFormatter={(v: number) => {
+                      if (Math.abs(v) >= 1_000_000) return `₦${(v / 1_000_000).toFixed(1)}M`;
+                      if (Math.abs(v) >= 1_000) return `₦${(v / 1_000).toFixed(0)}K`;
+                      return `₦${v}`;
+                    }}
+                  />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px" }}
+                    formatter={(value: number, name: string) => [
+                      new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(value),
+                      name,
+                    ]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "12px" }} formatter={(v) => <span style={{ color: "hsl(var(--muted-foreground))" }}>{v}</span>} />
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                  <Bar dataKey="revenue" name="Revenue" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="revenueTarget" name="Revenue Target" fill="hsl(142 76% 36% / 0.3)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="profit" name="Net Profit" radius={[4, 4, 0, 0]}>
+                    {monthlyPnl.map((entry, i) => (
+                      <Cell key={i} fill={entry.profit >= 0 ? "hsl(var(--primary))" : "hsl(var(--destructive))"} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="profitTarget" name="Profit Target" fill="hsl(var(--primary) / 0.25)" radius={[4, 4, 0, 0]} />
+                </BarChart>
               </ResponsiveContainer>
+              {monthlyPnl.every(m => m.revenueTarget === 0) && (
+                <p className="text-xs text-muted-foreground text-center mt-2">No targets configured — set them in the Financial Targets tab</p>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

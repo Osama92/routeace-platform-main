@@ -125,6 +125,22 @@ const PendingApprovalsPage = () => {
 
   useEffect(() => {
     fetchPendingItems();
+
+    // Realtime: auto-refresh when approval_status changes on any of the three tables
+    const channel = supabase
+      .channel("pending-approvals-page")
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatches", filter: "approval_status=eq.pending" }, () => {
+        fetchPendingItems();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "drivers", filter: "approval_status=eq.pending" }, () => {
+        fetchPendingItems();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "vehicles", filter: "approval_status=eq.pending" }, () => {
+        fetchPendingItems();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const handleApprove = async (type: string, id: string) => {
