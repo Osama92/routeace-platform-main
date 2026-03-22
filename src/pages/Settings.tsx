@@ -76,6 +76,8 @@ const SettingsPage = () => {
     google_maps_key: "",
     leadership_email: "",
     support_email: "",
+    admin_emails: "",
+    sla_notification_emails: "",
     sla_sms_recipients: "",
     // Company Profile
     company_name: "",
@@ -129,10 +131,14 @@ const SettingsPage = () => {
             }));
           }
           if (integration.name === "notifications") {
+            const adminArr = Array.isArray(integration.config?.admin_emails) ? integration.config.admin_emails.join(", ") : (integration.config?.admin_emails || "");
+            const slaArr = Array.isArray(integration.config?.sla_notification_emails) ? integration.config.sla_notification_emails.join(", ") : (integration.config?.sla_notification_emails || "");
             setFormData(prev => ({
               ...prev,
               leadership_email: integration.config?.leadership_email || "",
               support_email: integration.config?.support_email || "",
+              admin_emails: adminArr,
+              sla_notification_emails: slaArr,
             }));
           }
           if (integration.name === "sms_notifications") {
@@ -205,6 +211,8 @@ const SettingsPage = () => {
           config = {
             leadership_email: formData.leadership_email,
             support_email: formData.support_email,
+            admin_emails: formData.admin_emails.split(",").map(e => e.trim()).filter(Boolean),
+            sla_notification_emails: formData.sla_notification_emails.split(",").map(e => e.trim()).filter(Boolean),
           };
           break;
         case "sms_notifications":
@@ -591,7 +599,7 @@ const SettingsPage = () => {
               <CardHeader>
                 <CardTitle>Email Notification Settings</CardTitle>
                 <CardDescription>
-                  Configure where delivery status updates are sent
+                  Configure where delivery status updates and SLA breach alerts are sent
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -607,7 +615,7 @@ const SettingsPage = () => {
                       className="bg-secondary/50"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Receives all delivery status updates
+                      Receives delivery status updates and SLA breach alerts
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -621,7 +629,33 @@ const SettingsPage = () => {
                       className="bg-secondary/50"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Receives customer support-related updates
+                      Receives customer support-related updates and SLA breach alerts
+                    </p>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="admin_emails">Admin Alert Emails</Label>
+                    <Input
+                      id="admin_emails"
+                      value={formData.admin_emails}
+                      onChange={(e) => setFormData(prev => ({ ...prev, admin_emails: e.target.value }))}
+                      placeholder="admin1@company.com, admin2@company.com"
+                      className="bg-secondary/50"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Internal admin emails that receive SLA breach alerts. Separate multiple with commas. <span className="text-warning font-medium">Do not add customer or partner emails here.</span>
+                    </p>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="sla_notification_emails">SLA Breach Notification Emails</Label>
+                    <Input
+                      id="sla_notification_emails"
+                      value={formData.sla_notification_emails}
+                      onChange={(e) => setFormData(prev => ({ ...prev, sla_notification_emails: e.target.value }))}
+                      placeholder="ops@company.com, manager@company.com"
+                      className="bg-secondary/50"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Additional internal recipients for SLA breach alerts only (e.g. operations team). Separate multiple with commas. <span className="text-warning font-medium">Do not add customer or partner emails here.</span>
                     </p>
                   </div>
                 </div>
@@ -657,6 +691,7 @@ const SettingsPage = () => {
                   { id: "in_transit", label: "In Transit", description: "When package is in transit" },
                   { id: "delivered", label: "Delivered", description: "When package is delivered" },
                   { id: "document_expiry", label: "Document Expiry Alerts", description: "7 days before document expires" },
+                  { id: "sla_breach", label: "SLA Breach Alerts", description: "Sent to admin & SLA notification emails only — never to customers or partners" },
                 ].map((event) => (
                   <div key={event.id} className="flex items-center justify-between py-3 border-b border-border/50 last:border-0">
                     <div>
