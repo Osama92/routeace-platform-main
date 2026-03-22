@@ -388,6 +388,7 @@ const DispatchPage = () => {
     cargo_weight_kg: "",
     priority: "normal",
     scheduled_pickup: "",
+    scheduled_delivery: "",
     vehicle_id: "",
     driver_id: "",
     distance_km: "",
@@ -432,6 +433,7 @@ const DispatchPage = () => {
     cargo_weight_kg: "",
     priority: "normal",
     scheduled_pickup: "",
+    scheduled_delivery: "",
     vehicle_id: "",
     driver_id: "",
     distance_km: "",
@@ -837,6 +839,7 @@ const DispatchPage = () => {
         cargo_weight_kg: formData.cargo_weight_kg ? parseFloat(formData.cargo_weight_kg) : null,
         priority: formData.priority as "low" | "normal" | "high" | "urgent",
         scheduled_pickup: formData.scheduled_pickup || null,
+        scheduled_delivery: formData.scheduled_delivery || null,
         vehicle_id: formData.vehicle_id || null,
         driver_id: formData.driver_id || null,
         distance_km: distanceKm,
@@ -895,6 +898,7 @@ const DispatchPage = () => {
         cargo_weight_kg: "",
         priority: "normal",
         scheduled_pickup: "",
+        scheduled_delivery: "",
         vehicle_id: "",
         driver_id: "",
         distance_km: "",
@@ -979,6 +983,8 @@ const DispatchPage = () => {
         const oldStatus = selectedDispatch.status;
         const updatePayload: any = { status: statusUpdate.status };
         if (statusUpdate.delay_reason) updatePayload.delay_reason = statusUpdate.delay_reason;
+        if (statusUpdate.status === "picked_up") updatePayload.actual_pickup = new Date().toISOString();
+        if (statusUpdate.status === "delivered") updatePayload.actual_delivery = new Date().toISOString();
         const { error: updateError } = await supabase
           .from("dispatches")
           .update(updatePayload)
@@ -1226,6 +1232,9 @@ const DispatchPage = () => {
       scheduled_pickup: dispatch.scheduled_pickup
         ? new Date(dispatch.scheduled_pickup).toISOString().slice(0, 16)
         : "",
+      scheduled_delivery: (dispatch as any).scheduled_delivery
+        ? new Date((dispatch as any).scheduled_delivery).toISOString().slice(0, 16)
+        : "",
       vehicle_id: dispatch.vehicle_id || "",
       driver_id: dispatch.driver_id || "",
       distance_km: dispatch.distance_km?.toString() || "",
@@ -1288,6 +1297,7 @@ const DispatchPage = () => {
         cargo_weight_kg: editFormData.cargo_weight_kg ? parseFloat(editFormData.cargo_weight_kg) : null,
         priority: editFormData.priority,
         scheduled_pickup: editFormData.scheduled_pickup || null,
+        scheduled_delivery: editFormData.scheduled_delivery || null,
         vehicle_id: editFormData.vehicle_id || null,
         driver_id: editFormData.driver_id || null,
         distance_km: distanceKm,
@@ -1584,6 +1594,17 @@ const DispatchPage = () => {
                       name="scheduled_pickup"
                       type="datetime-local"
                       value={formData.scheduled_pickup}
+                      onChange={handleInputChange}
+                      className="bg-secondary/50"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="scheduled_delivery">Scheduled Delivery</Label>
+                    <Input
+                      id="scheduled_delivery"
+                      name="scheduled_delivery"
+                      type="datetime-local"
+                      value={formData.scheduled_delivery}
                       onChange={handleInputChange}
                       className="bg-secondary/50"
                     />
@@ -2841,6 +2862,17 @@ const DispatchPage = () => {
                   name="scheduled_pickup"
                   type="datetime-local"
                   value={editFormData.scheduled_pickup}
+                  onChange={handleEditInputChange}
+                  className="bg-secondary/50"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit_scheduled_delivery">Scheduled Delivery</Label>
+                <Input
+                  id="edit_scheduled_delivery"
+                  name="scheduled_delivery"
+                  type="datetime-local"
+                  value={editFormData.scheduled_delivery}
                   onChange={handleEditInputChange}
                   className="bg-secondary/50"
                 />

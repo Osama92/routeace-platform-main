@@ -145,6 +145,10 @@ const AdminAnalytics = () => {
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth() + 1;
 
+  const [slaMonth, setSlaMonth] = useState<string>("all");
+  const [slaYear, setSlaYear] = useState<string>(currentYear.toString());
+  const [slaShowResolved, setSlaShowResolved] = useState(false);
+
   // P&L period selector — defaults to current month
   const [pnlYear, setPnlYear] = useState(currentYear);
   const [pnlMonth, setPnlMonth] = useState(currentMonth);
@@ -294,9 +298,13 @@ const AdminAnalytics = () => {
     }
   };
 
-  const fetchSLABreaches = async () => {
+  const fetchSLABreaches = async (
+    month = slaMonth,
+    year = slaYear,
+    showResolved = slaShowResolved,
+  ) => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("sla_breach_alerts")
         .select(`
           *,
@@ -305,10 +313,25 @@ const AdminAnalytics = () => {
             customers(company_name)
           )
         `)
-        .eq("is_resolved", false)
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(100);
 
+      if (!showResolved) query = query.eq("is_resolved", false);
+
+      if (month !== "all") {
+        const y = parseInt(year);
+        const m = parseInt(month);
+        const start = `${y}-${String(m).padStart(2, "0")}-01`;
+        const lastDay = new Date(y, m, 0).getDate();
+        const end = `${y}-${String(m).padStart(2, "0")}-${lastDay}T23:59:59`;
+        query = query.gte("created_at", start).lte("created_at", end);
+      } else {
+        // Full year filter
+        const y = parseInt(year);
+        query = query.gte("created_at", `${y}-01-01`).lte("created_at", `${y}-12-31T23:59:59`);
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
       setSlaBreaches((data as SLABreachAlert[]) || []);
     } catch (error: any) {
@@ -324,6 +347,10 @@ const AdminAnalytics = () => {
     };
     loadData();
   }, []);
+
+  useEffect(() => {
+    fetchSLABreaches(slaMonth, slaYear, slaShowResolved);
+  }, [slaMonth, slaYear, slaShowResolved]);
 
   // Re-fetch P&L when period changes (after initial load)
   useEffect(() => {
@@ -1090,20 +1117,53 @@ const AdminAnalytics = () => {
 
         {/* SLA Alerts Tab */}
         <TabsContent value="sla" className="space-y-6">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap justify-between items-center gap-3">
             <h2 className="text-xl font-heading font-bold">SLA Breach Alerts</h2>
-            <Button variant="outline" onClick={checkSLABreaches} disabled={checkingSLA}>
-              {checkingSLA ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
-              Check for Breaches
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Month selector */}
+              <Select value={slaMonth} onValueChange={setSlaMonth}>
+                <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Months</SelectItem>
+                  {months.map((m, i) => (
+                    <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Year selector */}
+              <Select value={slaYear} onValueChange={setSlaYear}>
+                <SelectTrigger className="w-[90px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[currentYear - 1, currentYear, currentYear + 1].map(y => (
+                    <SelectItem key={y} value={y.toString()}>{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Show resolved toggle */}
+              <Button
+                variant={slaShowResolved ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSlaShowResolved(p => !p)}
+                className="gap-2"
+              >
+                <CheckCircle className="w-4 h-4" />
+                {slaShowResolved ? "Showing All" : "Show Resolved"}
+              </Button>
+              <Button variant="outline" onClick={checkSLABreaches} disabled={checkingSLA}>
+                {checkingSLA ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                Check for Breaches
+              </Button>
+            </div>
           </div>
 
-          {slaBreaches.length > 0 && (
+          {slaBreaches.filter(b => !b.is_resolved).length > 0 && (
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg flex items-center gap-3">
               <AlertTriangle className="w-6 h-6 text-destructive" />
               <div>
-                <p className="font-semibold text-destructive">{slaBreaches.length} Unresolved SLA Breaches</p>
-                <p className="text-sm text-muted-foreground">Action required to resolve delivery delays</p>
+                <p className="font-semibold text-destructive">{slaBreaches.filter(b => !b.is_resolved).length} Unresolved SLA Breaches</p>
+                <p className="text-sm text-muted-foreground">
+                  {slaMonth !== "all" ? `${months[parseInt(slaMonth) - 1]} ${slaYear}` : `Year ${slaYear}`} — Action required to resolve delivery delays
+                </p>
               </div>
             </motion.div>
           )}
@@ -1118,41 +1178,55 @@ const AdminAnalytics = () => {
                     <TableHead>Breach Type</TableHead>
                     <TableHead>Delay</TableHead>
                     <TableHead>Date</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {slaBreaches.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                         <CheckCircle className="w-8 h-8 mx-auto mb-2 text-success" />
-                        No active SLA breaches
+                        No SLA breaches for {slaMonth !== "all" ? `${months[parseInt(slaMonth) - 1]} ${slaYear}` : `${slaYear}`}
                       </TableCell>
                     </TableRow>
                   ) : (
                     slaBreaches.map((breach) => (
-                      <TableRow key={breach.id} className="border-border/50">
+                      <TableRow key={breach.id} className={`border-border/50 ${breach.is_resolved ? "opacity-60" : ""}`}>
                         <TableCell className="font-medium">
                           {breach.dispatches?.dispatch_number || "N/A"}
                         </TableCell>
                         <TableCell>{breach.dispatches?.customers?.company_name || "N/A"}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="capitalize">
-                            {breach.breach_type.replace("_", " ")}
+                          <Badge variant="outline" className={breach.breach_type === "eta_exceeded" ? "border-warning text-warning" : "border-destructive text-destructive"}>
+                            {breach.breach_type === "eta_exceeded" ? "ETA Exceeded" :
+                             breach.breach_type === "delivery_delay" ? "Delivery Delay" :
+                             breach.breach_type === "pickup_delay" ? "Pickup Delay" :
+                             breach.breach_type === "waypoint_delay" ? "Waypoint Delay" :
+                             breach.breach_type.replace(/_/g, " ")}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-destructive font-medium">
-                          {breach.delay_hours ? `${breach.delay_hours.toFixed(1)} hours` : "N/A"}
+                          {breach.delay_hours ? `${breach.delay_hours.toFixed(1)} hrs` : "N/A"}
                         </TableCell>
                         <TableCell>{format(new Date(breach.created_at), "MMM dd, HH:mm")}</TableCell>
                         <TableCell>
+                          {breach.is_resolved
+                            ? <Badge className="bg-success/15 text-success">Resolved</Badge>
+                            : <Badge className="bg-destructive/15 text-destructive">Open</Badge>}
+                        </TableCell>
+                        <TableCell>
                           <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={() => sendSLABreachEmail(breach)} title="Send Email Alert">
-                              <Mail className="w-4 h-4" />
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => resolveSLABreach(breach.id)}>
-                              Resolve
-                            </Button>
+                            {!breach.is_resolved && (
+                              <>
+                                <Button size="sm" variant="outline" onClick={() => sendSLABreachEmail(breach)} title="Send Email Alert">
+                                  <Mail className="w-4 h-4" />
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => resolveSLABreach(breach.id)}>
+                                  Resolve
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
