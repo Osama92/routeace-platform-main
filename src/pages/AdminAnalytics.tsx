@@ -105,6 +105,12 @@ interface SLABreachAlert {
   actual_time: string | null;
   delay_hours: number | null;
   is_resolved: boolean;
+  resolved_at: string | null;
+  resolution_category: string | null;
+  resolution_action: string | null;
+  resolution_days: number | null;
+  resolution_contact: string | null;
+  notes: string | null;
   created_at: string;
   dispatches?: {
     dispatch_number: string;
@@ -112,6 +118,61 @@ interface SLABreachAlert {
       company_name: string;
     };
   };
+}
+
+// Resolution options keyed by breach context
+const SLA_RESOLUTION_OPTIONS: Record<string, { category: string; action: string; needsContact?: boolean }[]> = {
+  offloading_loading: [
+    { category: "Customer coordination", action: "Customer and sales rep called — offloading scheduled", needsContact: true },
+    { category: "Customer coordination", action: "Customer contacted, provided access instructions", needsContact: true },
+    { category: "Operational", action: "Loading crew dispatched to assist" },
+    { category: "Operational", action: "Alternate offloading point arranged" },
+    { category: "Force majeure", action: "Public holiday / facility closure — no action possible" },
+  ],
+  vehicle_breakdown: [
+    { category: "Mechanical", action: "Vehicle repaired by mechanic on-site" },
+    { category: "Mechanical", action: "Vehicle towed, replacement truck dispatched" },
+    { category: "Mechanical", action: "Spare parts sourced and repair completed" },
+    { category: "Operational", action: "Cargo transferred to backup vehicle" },
+    { category: "Insurance", action: "Insurance claim filed, vehicle sent to workshop" },
+  ],
+  traffic: [
+    { category: "Force majeure", action: "Traffic congestion cleared — no action required" },
+    { category: "Routing", action: "Driver rerouted via alternate road" },
+    { category: "Force majeure", action: "Road closure / government restriction — beyond control" },
+    { category: "Operational", action: "Delivery time rescheduled with customer" },
+  ],
+  customer_delay: [
+    { category: "Customer coordination", action: "Customer called, new delivery window agreed", needsContact: true },
+    { category: "Customer coordination", action: "Sales rep escalated — customer provided instructions", needsContact: true },
+    { category: "Operational", action: "Delivery reattempted following customer availability" },
+  ],
+  eta_exceeded: [
+    { category: "Traffic", action: "Traffic / road conditions caused overrun — no action" },
+    { category: "Operational", action: "Route deviation added transit time — logged" },
+    { category: "Mechanical", action: "Minor vehicle issue resolved en route" },
+    { category: "Customer coordination", action: "Customer notified of delay — new ETA confirmed", needsContact: true },
+    { category: "Force majeure", action: "Weather / environmental event — beyond control" },
+  ],
+  delivery_delay: [
+    { category: "Customer coordination", action: "Customer and sales rep contacted — delivery rescheduled", needsContact: true },
+    { category: "Operational", action: "Delivery completed after access arranged" },
+    { category: "Mechanical", action: "Vehicle issue resolved, delivery completed" },
+    { category: "Force majeure", action: "Unforeseeable event — documented and closed" },
+  ],
+  default: [
+    { category: "Operational", action: "Issue identified and resolved internally" },
+    { category: "Customer coordination", action: "Customer informed and satisfied", needsContact: true },
+    { category: "Force majeure", action: "Beyond operational control — documented" },
+    { category: "Escalation", action: "Escalated to management and resolved" },
+  ],
+};
+
+function getResolutionOptions(breach: SLABreachAlert) {
+  // Map breach type + dispatch delay_reason to the best option set
+  if (breach.breach_type === "eta_exceeded") return SLA_RESOLUTION_OPTIONS.eta_exceeded;
+  if (breach.breach_type === "delivery_delay") return SLA_RESOLUTION_OPTIONS.delivery_delay;
+  return SLA_RESOLUTION_OPTIONS.default;
 }
 
 const months = [
@@ -148,6 +209,14 @@ const AdminAnalytics = () => {
   const [slaMonth, setSlaMonth] = useState<string>("all");
   const [slaYear, setSlaYear] = useState<string>(currentYear.toString());
   const [slaShowResolved, setSlaShowResolved] = useState(false);
+  const [resolvingBreach, setResolvingBreach] = useState<SLABreachAlert | null>(null);
+  const [resolutionForm, setResolutionForm] = useState({
+    category: "",
+    action: "",
+    days: "",
+    contact: "",
+    notes: "",
+  });
 
   // P&L period selector — defaults to current month
   const [pnlYear, setPnlYear] = useState(currentYear);
@@ -567,7 +636,17 @@ const AdminAnalytics = () => {
     }
   };
 
-  const resolveSLABreach = async (breachId: string) => {
+  const openResolveDialog = (breach: SLABreachAlert) => {
+    setResolvingBreach(breach);
+    setResolutionForm({ category: "", action: "", days: "", contact: "", notes: "" });
+  };
+
+  const resolveSLABreach = async () => {
+    if (!resolvingBreach || !resolutionForm.action) {
+      toast({ title: "Please select a resolution action", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
     try {
       const { error } = await supabase
         .from("sla_breach_alerts")
@@ -575,22 +654,23 @@ const AdminAnalytics = () => {
           is_resolved: true,
           resolved_at: new Date().toISOString(),
           resolved_by: user?.id,
+          resolution_category: resolutionForm.category || null,
+          resolution_action: resolutionForm.action,
+          resolution_days: resolutionForm.days ? parseFloat(resolutionForm.days) : null,
+          resolution_contact: resolutionForm.contact || null,
+          notes: resolutionForm.notes || null,
         })
-        .eq("id", breachId);
+        .eq("id", resolvingBreach.id);
 
       if (error) throw error;
 
-      toast({
-        title: "Breach Resolved",
-        description: "SLA breach has been marked as resolved",
-      });
-      fetchSLABreaches();
+      toast({ title: "Breach Resolved", description: "SLA breach logged and marked as resolved" });
+      setResolvingBreach(null);
+      fetchSLABreaches(slaMonth, slaYear, slaShowResolved);
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: "Failed to resolve breach",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: "Failed to resolve breach", variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1222,10 +1302,15 @@ const AdminAnalytics = () => {
                                 <Button size="sm" variant="outline" onClick={() => sendSLABreachEmail(breach)} title="Send Email Alert">
                                   <Mail className="w-4 h-4" />
                                 </Button>
-                                <Button size="sm" variant="outline" onClick={() => resolveSLABreach(breach.id)}>
+                                <Button size="sm" variant="outline" className="text-success border-success/40" onClick={() => openResolveDialog(breach)}>
                                   Resolve
                                 </Button>
                               </>
+                            )}
+                            {breach.is_resolved && breach.resolution_action && (
+                              <span className="text-xs text-muted-foreground max-w-[140px] truncate" title={breach.resolution_action}>
+                                {breach.resolution_action}
+                              </span>
                             )}
                           </div>
                         </TableCell>
@@ -1238,6 +1323,113 @@ const AdminAnalytics = () => {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* SLA Resolution Dialog */}
+      {resolvingBreach && (
+        <Dialog open={!!resolvingBreach} onOpenChange={(open) => { if (!open) setResolvingBreach(null); }}>
+          <DialogContent className="sm:max-w-[520px]">
+            <DialogHeader>
+              <DialogTitle>Resolve SLA Breach</DialogTitle>
+              <DialogDescription>
+                <span className="font-medium">{resolvingBreach.dispatches?.dispatch_number || "N/A"}</span>
+                {resolvingBreach.dispatches?.customers?.company_name ? ` · ${resolvingBreach.dispatches.customers.company_name}` : ""}
+                {" · "}
+                <span className="capitalize">
+                  {resolvingBreach.breach_type === "eta_exceeded" ? "ETA Exceeded" :
+                   resolvingBreach.breach_type === "delivery_delay" ? "Delivery Delay" :
+                   resolvingBreach.breach_type.replace(/_/g, " ")}
+                </span>
+                {resolvingBreach.delay_hours ? ` · ${resolvingBreach.delay_hours.toFixed(1)} hrs late` : ""}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 mt-2">
+              {/* Quick-select resolution options */}
+              <div className="space-y-2">
+                <Label>How was this resolved? <span className="text-destructive">*</span></Label>
+                <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                  {getResolutionOptions(resolvingBreach).map((opt, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setResolutionForm(p => ({ ...p, category: opt.category, action: opt.action }))}
+                      className={`w-full text-left px-3 py-2.5 rounded-lg border text-sm transition-colors ${
+                        resolutionForm.action === opt.action
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border/50 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                      }`}
+                    >
+                      <span className="text-xs font-medium text-primary block mb-0.5">{opt.category}</span>
+                      {opt.action}
+                    </button>
+                  ))}
+                  {/* Custom option */}
+                  <button
+                    type="button"
+                    onClick={() => setResolutionForm(p => ({ ...p, category: "Other", action: "custom" }))}
+                    className={`w-full text-left px-3 py-2.5 rounded-lg border text-sm transition-colors ${
+                      resolutionForm.action === "custom"
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border/50 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                    }`}
+                  >
+                    <span className="text-xs font-medium text-primary block mb-0.5">Other</span>
+                    Custom resolution — describe below
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom description shown when "custom" selected or to add detail */}
+              {(resolutionForm.action === "custom" || resolutionForm.action) && (
+                <div className="space-y-2">
+                  <Label>{resolutionForm.action === "custom" ? "Describe the resolution" : "Additional notes (optional)"}</Label>
+                  <Textarea
+                    value={resolutionForm.notes}
+                    onChange={(e) => setResolutionForm(p => ({ ...p, notes: e.target.value }))}
+                    placeholder={resolutionForm.action === "custom" ? "Describe exactly how this was resolved..." : "Any extra context..."}
+                    rows={2}
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Days to resolve</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={resolutionForm.days}
+                    onChange={(e) => setResolutionForm(p => ({ ...p, days: e.target.value }))}
+                    placeholder="e.g. 1.5"
+                    className="bg-secondary/50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Contact person (if applicable)</Label>
+                  <Input
+                    value={resolutionForm.contact}
+                    onChange={(e) => setResolutionForm(p => ({ ...p, contact: e.target.value }))}
+                    placeholder="Name / phone"
+                    className="bg-secondary/50"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-4">
+              <Button variant="outline" onClick={() => setResolvingBreach(null)}>Cancel</Button>
+              <Button
+                onClick={resolveSLABreach}
+                disabled={saving || (!resolutionForm.action || (resolutionForm.action === "custom" && !resolutionForm.notes))}
+                className="bg-success text-success-foreground hover:bg-success/90"
+              >
+                {saving ? "Saving..." : "Mark as Resolved"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </DashboardLayout>
   );
 };
