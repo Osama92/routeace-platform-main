@@ -454,12 +454,15 @@ const ProfitLossPage = () => {
                     backgroundColor: "hsl(var(--popover))",
                     borderColor: "hsl(var(--border))",
                     borderRadius: "8px",
+                    color: "hsl(var(--popover-foreground))",
                   }}
+                  labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                   formatter={(value: number, name: string) => [formatCurrency(value), name]}
                 />
                 <Legend
                   wrapperStyle={{ fontSize: "12px", paddingTop: "12px" }}
-                  formatter={(value) => <span style={{ color: "hsl(var(--muted-foreground))" }}>{value}</span>}
+                  formatter={(value) => <span style={{ color: "hsl(var(--foreground))" }}>{value}</span>}
                 />
                 <ReferenceLine y={0} stroke="hsl(var(--border))" />
                 <Bar dataKey="revenue" name="Revenue (Actual)" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} />

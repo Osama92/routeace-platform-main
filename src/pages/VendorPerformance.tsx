@@ -437,23 +437,26 @@ const VendorPerformance = () => {
                         <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                         <XAxis
                           dataKey="name"
-                          tick={{ fontSize: 11 }}
+                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
                           angle={-45}
                           textAnchor="end"
                           height={80}
                         />
-                        <YAxis yAxisId="left" />
+                        <YAxis yAxisId="left" tick={{ fill: "hsl(var(--muted-foreground))" }} />
                         {!hideFinancialData && (
-                          <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `₦${v}k`} />
+                          <YAxis yAxisId="right" orientation="right" tickFormatter={(v) => `₦${v}k`} tick={{ fill: "hsl(var(--muted-foreground))" }} />
                         )}
                         <Tooltip
+                          contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px", color: "hsl(var(--popover-foreground))" }}
+                          labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                          itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                           formatter={(value, name) =>
                             name === "Revenue (₦k)"
                               ? [`₦${Number(value).toLocaleString()}k`, "Revenue"]
                               : [value, name]
                           }
                         />
-                        <Legend />
+                        <Legend formatter={(v) => <span style={{ color: "hsl(var(--foreground))" }}>{v}</span>} />
                         <Bar yAxisId="left" dataKey="Trips" fill="hsl(var(--primary))" />
                         <Bar yAxisId="left" dataKey="Target" fill="hsl(var(--muted-foreground))" opacity={0.5} />
                         <Bar yAxisId="left" dataKey="On-Time Rate" fill="hsl(var(--success))" />

@@ -97,16 +97,16 @@ const DeliveryChart = () => {
                   <stop offset="95%" stopColor="hsl(173, 80%, 45%)" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(222, 30%, 16%)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis
                 dataKey="name"
-                stroke="hsl(215, 20%, 55%)"
+                stroke="hsl(var(--muted-foreground))"
                 fontSize={12}
                 tickLine={false}
                 axisLine={false}
               />
               <YAxis
-                stroke="hsl(215, 20%, 55%)"
+                stroke="hsl(var(--muted-foreground))"
                 fontSize={12}
                 tickLine={false}
                 axisLine={false}
@@ -114,11 +114,13 @@ const DeliveryChart = () => {
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: "hsl(222, 47%, 10%)",
-                  border: "1px solid hsl(222, 30%, 16%)",
+                  backgroundColor: "hsl(var(--popover))",
+                  border: "1px solid hsl(var(--border))",
                   borderRadius: "6px",
-                  color: "hsl(210, 40%, 98%)",
+                  color: "hsl(var(--popover-foreground))",
                 }}
+                labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                 formatter={(value: number, name: string) => [
                   name === "deliveries" ? value : `${value} km`,
                   name === "deliveries" ? "Deliveries" : "Distance",

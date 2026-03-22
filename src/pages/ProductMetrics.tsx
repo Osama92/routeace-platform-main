@@ -251,7 +251,10 @@ const ProductMetricsPage = () => {
                       backgroundColor: "hsl(var(--popover))",
                       borderColor: "hsl(var(--border))",
                       borderRadius: "8px",
+                      color: "hsl(var(--popover-foreground))",
                     }}
+                    labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                   />
                   <Area
                     type="monotone"
@@ -290,7 +293,10 @@ const ProductMetricsPage = () => {
                       backgroundColor: "hsl(var(--popover))",
                       borderColor: "hsl(var(--border))",
                       borderRadius: "8px",
+                      color: "hsl(var(--popover-foreground))",
                     }}
+                    labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                   />
                   <Bar dataKey="dispatches" fill="hsl(var(--success))" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -330,7 +336,10 @@ const ProductMetricsPage = () => {
                       backgroundColor: "hsl(var(--popover))",
                       borderColor: "hsl(var(--border))",
                       borderRadius: "8px",
+                      color: "hsl(var(--popover-foreground))",
                     }}
+                    labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                     formatter={(value: number) => [formatCurrency(value), "Revenue"]}
                   />
                   <Line
@@ -380,7 +389,10 @@ const ProductMetricsPage = () => {
                       backgroundColor: "hsl(var(--popover))",
                       borderColor: "hsl(var(--border))",
                       borderRadius: "8px",
+                      color: "hsl(var(--popover-foreground))",
                     }}
+                    labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                   />
                 </PieChart>
               </ResponsiveContainer>

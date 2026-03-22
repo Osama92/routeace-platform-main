@@ -416,18 +416,21 @@ const SessionAnalytics = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={dailySummary}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis 
-                      dataKey="date" 
-                      tick={{ fontSize: 12 }}
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
                       tickFormatter={(value) => format(new Date(value), "MMM d")}
                     />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: "hsl(var(--card))", 
+                    <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
                         border: "1px solid hsl(var(--border))",
                         borderRadius: "8px",
+                        color: "hsl(var(--popover-foreground))",
                       }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                      itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                       formatter={(value: number) => [`${value} hours`, "Total Hours"]}
                       labelFormatter={(label) => format(new Date(label), "PPP")}
                     />
@@ -461,17 +464,20 @@ const SessionAnalytics = () => {
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={hourlyData}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis 
-                      dataKey="hour" 
-                      tick={{ fontSize: 12 }}
+                    <XAxis
+                      dataKey="hour"
+                      tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
                     />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: "hsl(var(--card))", 
+                    <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
                         border: "1px solid hsl(var(--border))",
                         borderRadius: "8px",
+                        color: "hsl(var(--popover-foreground))",
                       }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                      itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                       formatter={(value: number) => [`${value} users`, "Active Users"]}
                     />
                     <Area 

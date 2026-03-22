@@ -428,10 +428,12 @@ const BudgetVarianceAnalysis = ({ month, year }: Props) => {
                   }}
                 />
                 <Tooltip
-                  contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px" }}
+                  contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px", color: "hsl(var(--popover-foreground))" }}
+                  labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                   formatter={(value: number, name: string) => [formatFullCurrency(value), name]}
                 />
-                <Legend wrapperStyle={{ fontSize: "12px" }} />
+                <Legend wrapperStyle={{ fontSize: "12px" }} formatter={(v) => <span style={{ color: "hsl(var(--foreground))" }}>{v}</span>} />
                 {hasTarget && (
                   <Bar dataKey="Budgeted" fill="hsl(var(--primary))" opacity={0.35} radius={[4, 4, 0, 0]} />
                 )}

@@ -328,7 +328,12 @@ const InvoiceReports = () => {
                     <Cell key={index} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px", color: "hsl(var(--popover-foreground))" }}
+                  labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  itemStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  formatter={(value: number) => formatCurrency(value)}
+                />
               </PieChart>
             </ResponsiveContainer>
             <div className="flex justify-center gap-4 mt-2">
@@ -357,7 +362,12 @@ const InvoiceReports = () => {
                   width={100}
                   tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }}
                 />
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(var(--popover))", borderColor: "hsl(var(--border))", borderRadius: "8px", color: "hsl(var(--popover-foreground))" }}
+                  labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  itemStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  formatter={(value: number) => formatCurrency(value)}
+                />
                 <Bar dataKey="paid" name="Paid" fill="hsl(var(--success))" stackId="a" />
                 <Bar dataKey="unpaid" name="Unpaid" fill="hsl(var(--warning))" stackId="a" />
               </BarChart>
