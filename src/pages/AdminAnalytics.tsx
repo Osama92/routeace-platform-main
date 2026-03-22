@@ -48,6 +48,7 @@ import {
   TrendingUp,
   TrendingDown,
   DollarSign,
+  Pencil,
   Target,
   CheckCircle,
   Clock,
@@ -134,6 +135,7 @@ const AdminAnalytics = () => {
   const [slaBreaches, setSlaBreaches] = useState<SLABreachAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [isTargetDialogOpen, setIsTargetDialogOpen] = useState(false);
+  const [editingTarget, setEditingTarget] = useState<FinancialTarget | null>(null);
   const [saving, setSaving] = useState(false);
   const [checkingSLA, setCheckingSLA] = useState(false);
   const { toast } = useToast();
@@ -340,25 +342,79 @@ const AdminAnalytics = () => {
 
     setSaving(true);
     try {
-      const { error } = await supabase.from("financial_targets").insert({
-        target_type: targetForm.target_type,
-        target_month: targetForm.target_type === "monthly" ? parseInt(targetForm.target_month) : null,
-        target_year: parseInt(targetForm.target_year),
-        revenue_target: parseFloat(targetForm.revenue_target),
-        expense_target: parseFloat(targetForm.expense_target) || 0,
-        profit_target: parseFloat(targetForm.profit_target),
-        cogs_target: parseFloat(targetForm.cogs_target) || 0,
-        notes: targetForm.notes || null,
-        created_by: user?.id,
-        status: "pending",
-      });
+      const year = parseInt(targetForm.target_year);
+      const annualRevenue = parseFloat(targetForm.revenue_target);
+      const annualProfit = parseFloat(targetForm.profit_target);
+      const annualExpense = parseFloat(targetForm.expense_target) || 0;
+      const annualCogs = parseFloat(targetForm.cogs_target) || 0;
+      const notes = targetForm.notes || null;
 
-      if (error) throw error;
+      if (targetForm.target_type === "annual") {
+        // Divide evenly across all 12 months — round to whole numbers, add remainder to December
+        const base = (v: number) => Math.floor(v / 12);
+        const remainder = (v: number) => v - base(v) * 11; // month 12 gets the remainder
 
-      toast({
-        title: "Target Created",
-        description: "Financial target submitted for approval",
-      });
+        const monthlyRecords = Array.from({ length: 12 }, (_, i) => {
+          const isLast = i === 11;
+          return {
+            target_type: "monthly",
+            target_month: i + 1,
+            target_year: year,
+            revenue_target: isLast ? remainder(annualRevenue) : base(annualRevenue),
+            expense_target: isLast ? remainder(annualExpense) : base(annualExpense),
+            profit_target: isLast ? remainder(annualProfit) : base(annualProfit),
+            cogs_target: isLast ? remainder(annualCogs) : base(annualCogs),
+            notes: notes ? `[Annual ÷ 12] ${notes}` : "[Annual ÷ 12]",
+            created_by: user?.id,
+            status: "pending",
+          };
+        });
+
+        // Also insert the annual summary record
+        const allRecords = [
+          {
+            target_type: "annual",
+            target_month: null,
+            target_year: year,
+            revenue_target: annualRevenue,
+            expense_target: annualExpense,
+            profit_target: annualProfit,
+            cogs_target: annualCogs,
+            notes,
+            created_by: user?.id,
+            status: "pending",
+          },
+          ...monthlyRecords,
+        ];
+
+        const { error } = await supabase.from("financial_targets").insert(allRecords);
+        if (error) throw error;
+
+        toast({
+          title: "Annual Target Created",
+          description: `Annual target split evenly across all 12 months of ${year} and submitted for approval`,
+        });
+      } else {
+        const { error } = await supabase.from("financial_targets").insert({
+          target_type: "monthly",
+          target_month: parseInt(targetForm.target_month),
+          target_year: year,
+          revenue_target: annualRevenue,
+          expense_target: annualExpense,
+          profit_target: annualProfit,
+          cogs_target: annualCogs,
+          notes,
+          created_by: user?.id,
+          status: "pending",
+        });
+        if (error) throw error;
+
+        toast({
+          title: "Target Created",
+          description: "Monthly financial target submitted for approval",
+        });
+      }
+
       setIsTargetDialogOpen(false);
       resetTargetForm();
       fetchTargets();
@@ -384,6 +440,48 @@ const AdminAnalytics = () => {
       cogs_target: "",
       notes: "",
     });
+  };
+
+  const handleEditTarget = (target: FinancialTarget) => {
+    setEditingTarget(target);
+    setTargetForm({
+      target_type: target.target_type,
+      target_month: (target.target_month ?? currentMonth).toString(),
+      target_year: target.target_year.toString(),
+      revenue_target: target.revenue_target.toString(),
+      expense_target: (target.expense_target ?? 0).toString(),
+      profit_target: target.profit_target.toString(),
+      cogs_target: (target.cogs_target ?? 0).toString(),
+      notes: target.notes ?? "",
+    });
+    setIsTargetDialogOpen(true);
+  };
+
+  const handleUpdateTarget = async () => {
+    if (!editingTarget || !targetForm.revenue_target || !targetForm.profit_target) {
+      toast({ title: "Validation Error", description: "Please fill in revenue and profit targets", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      const { error } = await supabase.from("financial_targets").update({
+        revenue_target: parseFloat(targetForm.revenue_target),
+        expense_target: parseFloat(targetForm.expense_target) || 0,
+        profit_target: parseFloat(targetForm.profit_target),
+        cogs_target: parseFloat(targetForm.cogs_target) || 0,
+        notes: targetForm.notes || null,
+      }).eq("id", editingTarget.id);
+      if (error) throw error;
+      toast({ title: "Target Updated", description: "Financial target updated successfully" });
+      setIsTargetDialogOpen(false);
+      setEditingTarget(null);
+      resetTargetForm();
+      fetchTargets();
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to update target", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleApproveTarget = async (targetId: string, approve: boolean, reason?: string) => {
@@ -826,7 +924,10 @@ const AdminAnalytics = () => {
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-heading font-bold">Financial Targets</h2>
             {isAdmin && (
-              <Dialog open={isTargetDialogOpen} onOpenChange={setIsTargetDialogOpen}>
+              <Dialog open={isTargetDialogOpen} onOpenChange={(open) => {
+                setIsTargetDialogOpen(open);
+                if (!open) { setEditingTarget(null); resetTargetForm(); }
+              }}>
                 <DialogTrigger asChild>
                   <Button className="bg-primary">
                     <Plus className="w-4 h-4 mr-2" />
@@ -835,16 +936,20 @@ const AdminAnalytics = () => {
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-[500px]">
                   <DialogHeader>
-                    <DialogTitle>Create Financial Target</DialogTitle>
+                    <DialogTitle>{editingTarget ? "Edit Financial Target" : "Create Financial Target"}</DialogTitle>
                     <DialogDescription>
-                      Set revenue, expense, and profit targets for approval
+                      {editingTarget
+                        ? "Update the target values below. Period and type cannot be changed."
+                        : targetForm.target_type === "annual"
+                          ? `Annual targets will be automatically split evenly across all 12 months of ${targetForm.target_year}`
+                          : "Set revenue, expense, and profit targets for approval"}
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4 mt-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Target Type</Label>
-                        <Select value={targetForm.target_type} onValueChange={(v) => setTargetForm(p => ({ ...p, target_type: v }))}>
+                        <Select value={targetForm.target_type} onValueChange={(v) => setTargetForm(p => ({ ...p, target_type: v }))} disabled={!!editingTarget}>
                           <SelectTrigger><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="monthly">Monthly</SelectItem>
@@ -854,7 +959,7 @@ const AdminAnalytics = () => {
                       </div>
                       <div className="space-y-2">
                         <Label>Year</Label>
-                        <Select value={targetForm.target_year} onValueChange={(v) => setTargetForm(p => ({ ...p, target_year: v }))}>
+                        <Select value={targetForm.target_year} onValueChange={(v) => setTargetForm(p => ({ ...p, target_year: v }))} disabled={!!editingTarget}>
                           <SelectTrigger><SelectValue /></SelectTrigger>
                           <SelectContent>
                             {[currentYear - 1, currentYear, currentYear + 1].map(y => (
@@ -864,7 +969,7 @@ const AdminAnalytics = () => {
                         </Select>
                       </div>
                     </div>
-                    {targetForm.target_type === "monthly" && (
+                    {!editingTarget && targetForm.target_type === "monthly" && (
                       <div className="space-y-2">
                         <Label>Month</Label>
                         <Select value={targetForm.target_month} onValueChange={(v) => setTargetForm(p => ({ ...p, target_month: v }))}>
@@ -876,6 +981,16 @@ const AdminAnalytics = () => {
                           </SelectContent>
                         </Select>
                       </div>
+                    )}
+                    {editingTarget && targetForm.target_type === "monthly" && (
+                      <p className="text-xs text-muted-foreground bg-secondary/50 rounded-lg px-3 py-2">
+                        Period: {months[(editingTarget.target_month ?? 1) - 1]} {editingTarget.target_year} (cannot be changed)
+                      </p>
+                    )}
+                    {!editingTarget && targetForm.target_type === "annual" && (
+                      <p className="text-xs text-muted-foreground bg-secondary/50 rounded-lg px-3 py-2">
+                        Each value will be divided by 12 and saved as a monthly target for Jan–Dec {targetForm.target_year}. Any remainder goes to December.
+                      </p>
                     )}
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
@@ -903,9 +1018,9 @@ const AdminAnalytics = () => {
                     </div>
                   </div>
                   <DialogFooter className="mt-4">
-                    <Button variant="outline" onClick={() => setIsTargetDialogOpen(false)}>Cancel</Button>
-                    <Button onClick={handleCreateTarget} disabled={saving}>
-                      {saving ? "Saving..." : "Submit for Approval"}
+                    <Button variant="outline" onClick={() => { setIsTargetDialogOpen(false); setEditingTarget(null); resetTargetForm(); }}>Cancel</Button>
+                    <Button onClick={editingTarget ? handleUpdateTarget : handleCreateTarget} disabled={saving}>
+                      {saving ? "Saving..." : editingTarget ? "Save Changes" : "Submit for Approval"}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -949,6 +1064,9 @@ const AdminAnalytics = () => {
                           <TableCell>
                             {target.status === "pending" && (
                               <div className="flex gap-2">
+                                <Button size="sm" variant="outline" className="text-muted-foreground" onClick={() => handleEditTarget(target)}>
+                                  <Pencil className="w-4 h-4" />
+                                </Button>
                                 <Button size="sm" variant="outline" className="text-success" onClick={() => handleApproveTarget(target.id, true)}>
                                   <CheckCircle className="w-4 h-4" />
                                 </Button>
