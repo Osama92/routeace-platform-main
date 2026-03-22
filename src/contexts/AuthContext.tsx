@@ -185,12 +185,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       (event, session) => {
         setSession(session);
         setUser(session?.user ?? null);
-        
-        // Handle session tracking based on auth events
+
         if (event === "SIGNED_IN" && session?.user) {
-          // Defer session creation with setTimeout to avoid deadlock
+          // Defer to avoid Supabase client deadlock, but keep loading=true until done
           setTimeout(async () => {
-            // Only create a session record for a genuine new login, not token refresh
             if (!sessionIdRef.current) {
               const newSessionId = await createSessionRecord(session.user.id);
               if (newSessionId) {
@@ -205,9 +203,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setApprovalStatus(status);
             setSuspensionReason(reason);
             setGrantedRoutes(await fetchGrantedRoutes(session.user.id));
+            setLoading(false);
           }, 0);
         } else if (event === "SIGNED_OUT") {
-          // Update session record on sign out
           if (sessionIdRef.current) {
             updateSessionRecord(sessionIdRef.current);
             sessionIdRef.current = null;
@@ -217,8 +215,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           setApprovalStatus(null);
           setSuspensionReason(null);
           setGrantedRoutes(new Set());
+          setLoading(false);
+        } else if (event === "INITIAL_SESSION") {
+          // Handled by getSession() below — don't setLoading here to avoid race
         } else if (session?.user) {
-          // For token refresh or other events, just fetch role and status
+          // Token refresh or other events
           setTimeout(async () => {
             const role = await fetchUserRole(session.user.id);
             setUserRole(role);
@@ -226,10 +227,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setApprovalStatus(status);
             setSuspensionReason(reason);
             setGrantedRoutes(await fetchGrantedRoutes(session.user.id));
+            setLoading(false);
           }, 0);
+        } else {
+          setLoading(false);
         }
-        
-        setLoading(false);
       }
     );
 
@@ -238,10 +240,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        // Only create a session record if the SIGNED_IN event hasn't already done so.
-        // On a page refresh Supabase fires INITIAL_SESSION (not SIGNED_IN), so we
-        // create the record here. On a fresh login, SIGNED_IN fires first and sets
-        // sessionCreatedByEventRef so we skip creation here to avoid duplicates.
         if (!sessionCreatedByEventRef.current && !sessionIdRef.current) {
           const newSessionId = await createSessionRecord(session.user.id);
           if (newSessionId) {

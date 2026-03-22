@@ -12,7 +12,8 @@ const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
   const { user, userRole, loading, isApproved, approvalStatus, suspensionReason, grantedRoutes } = useAuth();
   const location = useLocation();
 
-  if (loading) {
+  // Show spinner while auth is initialising OR while user is known but approval not yet fetched
+  if (loading || (user && approvalStatus === null)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
