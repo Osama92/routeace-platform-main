@@ -107,7 +107,7 @@ const ProfitLossPage = () => {
       // Fetch expenses
       const { data: expenses } = await supabase
         .from("expenses")
-        .select("amount, category, is_cogs")
+        .select("amount, category, is_cogs, approval_status")
         .gte("expense_date", format(start, "yyyy-MM-dd"))
         .lte("expense_date", format(end, "yyyy-MM-dd"));
 

@@ -253,7 +253,7 @@ const AdminAnalytics = () => {
       // Fetch expenses for selected month
       const { data: expenses, error: expError } = await supabase
         .from("expenses")
-        .select("amount, is_cogs, expense_date, category")
+        .select("amount, is_cogs, expense_date, category, approval_status")
         .gte("expense_date", periodStart.split("T")[0])
         .lte("expense_date", periodEnd.split("T")[0]);
 
