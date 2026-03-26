@@ -262,8 +262,9 @@ const AdminAnalytics = () => {
       // Calculate totals — revenue = all invoices raised; collected = paid only
       const revenue = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
       const collected = invoices?.filter(inv => inv.status === "paid").reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
-      const cogs = expenses?.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
-      const operatingExpenses = expenses?.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
+      const approvedExpenses = expenses?.filter(e => e.approval_status === "approved") || [];
+      const cogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
+      const operatingExpenses = approvedExpenses.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
       const grossProfit = revenue - cogs;
       const netProfit = grossProfit - operatingExpenses;
       const grossMargin = revenue > 0 ? (grossProfit / revenue) * 100 : 0;

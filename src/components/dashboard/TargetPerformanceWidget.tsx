@@ -65,15 +65,16 @@ const TargetPerformanceWidget = () => {
 
       const { data: expenses } = await supabase
         .from("expenses")
-        .select("amount, is_cogs")
+        .select("amount, is_cogs, approval_status")
         .gte("expense_date", startOfMonth.split('T')[0])
         .lte("expense_date", endOfMonth.split('T')[0]);
 
+      const approvedExpenses = expenses?.filter(e => e.approval_status === "approved") || [];
       // If no transaction data for COGS, use expenses
       if (actualCogs === 0) {
-        actualCogs = expenses?.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
+        actualCogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
       }
-      const actualOpex = expenses?.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) || 0;
+      const actualOpex = approvedExpenses.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
       const actualProfit = actualRevenue - actualCogs - actualOpex;
 
       if (target) {

@@ -120,8 +120,9 @@ const ProfitLossPage = () => {
 
       // Calculate P&L
       const revenue = (invoices || []).reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
-      const cogs = (expenses || []).filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
-      const operatingExpenses = (expenses || []).filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+      const approvedExpenses = (expenses || []).filter(e => e.approval_status === "approved");
+      const cogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+      const operatingExpenses = approvedExpenses.filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
       const grossProfit = revenue - cogs;
       const netProfit = grossProfit - operatingExpenses;
       const grossMargin = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
@@ -142,7 +143,7 @@ const ProfitLossPage = () => {
 
       // Build expense breakdown
       const breakdown = new Map<string, number>();
-      (expenses || []).filter(e => !e.is_cogs).forEach(e => {
+      (expenses || []).filter(e => !e.is_cogs && e.approval_status === "approved").forEach(e => {
         const current = breakdown.get(e.category) || 0;
         breakdown.set(e.category, current + Number(e.amount));
       });
@@ -186,13 +187,14 @@ const ProfitLossPage = () => {
 
         const { data: monthExpenses } = await supabase
           .from("expenses")
-          .select("amount, is_cogs")
+          .select("amount, is_cogs, approval_status")
           .gte("expense_date", format(monthStart, "yyyy-MM-dd"))
           .lte("expense_date", format(monthEnd, "yyyy-MM-dd"));
 
+        const approvedMonthExpenses = (monthExpenses || []).filter(e => e.approval_status === "approved");
         const monthRevenue = (monthInvoices || []).reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
-        const monthCogs = (monthExpenses || []).filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
-        const monthOpex = (monthExpenses || []).filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        const monthCogs = approvedMonthExpenses.filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        const monthOpex = approvedMonthExpenses.filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
         const monthGrossProfit = monthRevenue - monthCogs;
         const monthNetProfit = monthGrossProfit - monthOpex;
         const targetKey = `${monthStart.getFullYear()}-${monthStart.getMonth() + 1}`;

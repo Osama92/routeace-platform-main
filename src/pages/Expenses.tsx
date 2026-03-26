@@ -572,9 +572,10 @@ const Expenses = () => {
     return matchesSearch && matchesCategory && matchesCogs;
   });
 
-  const totalExpenses = periodExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
-  const cogsTotal = periodExpenses.filter(exp => exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
-  const opexTotal = periodExpenses.filter(exp => !exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const approvedPeriodExpenses = periodExpenses.filter(exp => exp.approval_status === "approved");
+  const totalExpenses = approvedPeriodExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const cogsTotal = approvedPeriodExpenses.filter(exp => exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const opexTotal = approvedPeriodExpenses.filter(exp => !exp.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
 
   const getCategoryInfo = (category: string) => {
     return expenseCategories.find((c) => c.value === category) || expenseCategories[expenseCategories.length - 1];
