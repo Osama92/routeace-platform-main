@@ -87,6 +87,7 @@ const AnalyticsPage = () => {
   const [editingIdleReason, setEditingIdleReason] = useState<{ vehicleId: string; value: string } | null>(null);
   const [topRoutes, setTopRoutes] = useState<any[]>([]);
   const [driverPerformance, setDriverPerformance] = useState<any[]>([]);
+  const [momOTD, setMomOTD] = useState<{ month: string; otd: number; total: number }[]>([]);
 
   useEffect(() => {
     fetchAnalyticsData();
@@ -405,6 +406,30 @@ const AnalyticsPage = () => {
         });
       }
       setRevenueData(revenueTrend);
+
+      // MOM OTD — last 6 calendar months (always fixed, independent of date range)
+      const momData: { month: string; otd: number; total: number }[] = [];
+      const now = new Date();
+      for (let m = 5; m >= 0; m--) {
+        const monthDate = new Date(now.getFullYear(), now.getMonth() - m, 1);
+        const monthStart = format(monthDate, "yyyy-MM-dd");
+        const monthEnd = format(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0), "yyyy-MM-dd") + "T23:59:59";
+        const { data: mDispatches } = await supabase
+          .from("dispatches")
+          .select("status, actual_pickup, scheduled_pickup, actual_delivery, created_at, routes:route_id(estimated_duration_hours)")
+          .eq("status", "delivered")
+          .gte("created_at", monthStart)
+          .lte("created_at", monthEnd)
+          .or("is_historical.is.null,is_historical.eq.false");
+        const mDelivered = mDispatches || [];
+        const mOnTime = mDelivered.filter((d: any) => isOnTime(d)).length;
+        momData.push({
+          month: format(monthDate, "MMM yy"),
+          otd: mDelivered.length > 0 ? Math.round((mOnTime / mDelivered.length) * 100) : 0,
+          total: mDelivered.length,
+        });
+      }
+      setMomOTD(momData);
 
     } catch (error) {
       console.error("Error fetching analytics:", error);
@@ -778,11 +803,48 @@ const AnalyticsPage = () => {
           </div>
         </motion.div>
 
-        {/* Delay Reasons */}
+        {/* MOM OTD Chart */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.3 }}
+          className="lg:col-span-2 glass-card p-6"
+        >
+          <h3 className="font-heading font-semibold text-lg text-foreground mb-1">
+            Month-over-Month OTD
+          </h3>
+          <p className="text-xs text-muted-foreground mb-4">On-time delivery rate % over the last 6 months</p>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={momOTD} barSize={32}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="month" fontSize={12} tickLine={false} stroke="hsl(var(--muted-foreground))" tick={{ fill: "hsl(var(--muted-foreground))" }} />
+                <YAxis domain={[0, 100]} unit="%" fontSize={12} tickLine={false} stroke="hsl(var(--muted-foreground))" tick={{ fill: "hsl(var(--muted-foreground))" }} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: "8px", color: "hsl(var(--popover-foreground))" }}
+                  labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  formatter={(value: number, _: string, props: any) => [`${value}% (${props.payload.total} trips)`, "OTD"]}
+                />
+                <Bar dataKey="otd" radius={[4, 4, 0, 0]} name="OTD %">
+                  {momOTD.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.otd >= 80 ? "hsl(142, 76%, 36%)" : entry.otd >= 60 ? "hsl(38, 92%, 50%)" : "hsl(0, 72%, 51%)"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(142, 76%, 36%)" }} /> ≥80% On Track</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(38, 92%, 50%)" }} /> 60–79% Watch</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(0, 72%, 51%)" }} /> &lt;60% At Risk</span>
+          </div>
+        </motion.div>
+
+        {/* Delay Reasons */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.35 }}
           className="glass-card p-6"
         >
           <h3 className="font-heading font-semibold text-lg text-foreground mb-1">
