@@ -59,6 +59,8 @@ import {
   Loader2,
   Truck,
   Pencil,
+  X,
+  CalendarDays,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -152,6 +154,9 @@ interface BankDetails {
   account_number: string;
 }
 
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const YEARS = Array.from({ length: 4 }, (_, i) => new Date().getFullYear() - i);
+
 const statusConfig: Record<string, { label: string; icon: typeof CheckCircle; className: string }> = {
   paid: {
     label: "Paid",
@@ -209,6 +214,8 @@ const InvoicesPage = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(new Date().getMonth() + 1);
+  const [selectedYear, setSelectedYear] = useState<number | null>(new Date().getFullYear());
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -1272,7 +1279,17 @@ const InvoicesPage = () => {
     }
   };
 
-  const filteredInvoices = invoices.filter((invoice) => {
+  const periodActive = selectedMonth !== null && selectedYear !== null;
+
+  const periodInvoices = periodActive
+    ? invoices.filter((inv) => {
+        const dateStr = (inv as any).invoice_date || inv.created_at;
+        const d = new Date(dateStr);
+        return d.getMonth() + 1 === selectedMonth && d.getFullYear() === selectedYear;
+      })
+    : invoices;
+
+  const filteredInvoices = periodInvoices.filter((invoice) => {
     const matchesSearch =
       invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
       invoice.customers?.company_name?.toLowerCase().includes(searchQuery.toLowerCase());
@@ -1282,16 +1299,10 @@ const InvoicesPage = () => {
   });
 
   const totals = {
-    total: invoices.reduce((acc, inv) => acc + inv.total_amount, 0),
-    paid: invoices
-      .filter((inv) => inv.status === "paid")
-      .reduce((acc, inv) => acc + inv.total_amount, 0),
-    pending: invoices
-      .filter((inv) => inv.status === "pending")
-      .reduce((acc, inv) => acc + inv.total_amount, 0),
-    overdue: invoices
-      .filter((inv) => inv.status === "overdue")
-      .reduce((acc, inv) => acc + inv.total_amount, 0),
+    total: periodInvoices.reduce((acc, inv) => acc + inv.total_amount, 0),
+    paid: periodInvoices.filter((inv) => inv.status === "paid").reduce((acc, inv) => acc + inv.total_amount, 0),
+    pending: periodInvoices.filter((inv) => inv.status === "pending").reduce((acc, inv) => acc + inv.total_amount, 0),
+    overdue: periodInvoices.filter((inv) => inv.status === "overdue").reduce((acc, inv) => acc + inv.total_amount, 0),
   };
 
   const handleSendInvoice = (invoice: Invoice) => {
@@ -1320,28 +1331,12 @@ const InvoicesPage = () => {
       subtitle="Manage billing and payment tracking"
     >
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         {[
-          {
-            label: "Total Revenue",
-            value: formatCurrency(totals.total),
-            color: "text-foreground",
-          },
-          {
-            label: "Collected",
-            value: formatCurrency(totals.paid),
-            color: "text-success",
-          },
-          {
-            label: "Pending",
-            value: formatCurrency(totals.pending),
-            color: "text-warning",
-          },
-          {
-            label: "Overdue",
-            value: formatCurrency(totals.overdue),
-            color: "text-destructive",
-          },
+          { label: "Total Revenue", value: formatCurrency(totals.total), color: "text-foreground" },
+          { label: "Collected", value: formatCurrency(totals.paid), color: "text-success" },
+          { label: "Pending", value: formatCurrency(totals.pending), color: "text-warning" },
+          { label: "Overdue", value: formatCurrency(totals.overdue), color: "text-destructive" },
         ].map((stat, index) => (
           <motion.div
             key={stat.label}
@@ -1350,18 +1345,52 @@ const InvoicesPage = () => {
             transition={{ duration: 0.3, delay: index * 0.05 }}
             className="glass-card p-4"
           >
-            <p className="text-sm text-muted-foreground">{stat.label}</p>
-            <p className={`text-2xl font-heading font-bold mt-1 ${stat.color}`}>
-              {stat.value}
+            <p className="text-xs text-muted-foreground mb-1">{stat.label}</p>
+            <p className={`text-2xl font-heading font-bold ${stat.color}`}>{stat.value}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {periodActive ? `${MONTHS[(selectedMonth as number) - 1]} ${selectedYear}` : "All time"}
             </p>
           </motion.div>
         ))}
       </div>
 
       {/* Actions Bar */}
-      <div className="invoices-actions-bar flex flex-col md:flex-row gap-4 items-start md:items-center justify-between mb-6">
-        <div className="flex gap-4 flex-1">
-          <div className="relative flex-1 max-w-md">
+      <div className="invoices-actions-bar flex flex-col md:flex-row gap-3 items-start md:items-center justify-between mb-6">
+        {/* Left: Period + Search + Status */}
+        <div className="flex items-center gap-2 flex-1 flex-wrap">
+          <div className="flex items-center gap-1 bg-secondary/50 border border-border/50 rounded-md px-2 h-10">
+            <CalendarDays className="w-4 h-4 text-muted-foreground shrink-0" />
+            <Select value={selectedMonth !== null ? String(selectedMonth) : ""} onValueChange={(v) => setSelectedMonth(Number(v))}>
+              <SelectTrigger className="border-0 bg-transparent shadow-none h-8 w-32 px-1 focus:ring-0">
+                <SelectValue placeholder="Month" />
+              </SelectTrigger>
+              <SelectContent>
+                {MONTHS.map((m, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedYear !== null ? String(selectedYear) : ""} onValueChange={(v) => setSelectedYear(Number(v))}>
+              <SelectTrigger className="border-0 bg-transparent shadow-none h-8 w-20 px-1 focus:ring-0">
+                <SelectValue placeholder="Year" />
+              </SelectTrigger>
+              <SelectContent>
+                {YEARS.map((y) => (
+                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {periodActive && (
+              <button
+                onClick={() => { setSelectedMonth(null); setSelectedYear(null); }}
+                className="ml-1 text-muted-foreground hover:text-foreground transition-colors"
+                title="Clear period filter"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="relative flex-1 min-w-48 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               placeholder="Search invoices..."
@@ -1371,7 +1400,7 @@ const InvoicesPage = () => {
             />
           </div>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-40 bg-secondary/50 border-border/50">
+            <SelectTrigger className="w-36 bg-secondary/50 border-border/50">
               <Filter className="w-4 h-4 mr-2" />
               <SelectValue placeholder="Status" />
             </SelectTrigger>
