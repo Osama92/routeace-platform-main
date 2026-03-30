@@ -28,6 +28,8 @@ import {
   Phone,
   Mail,
   MapPin,
+  RefreshCw,
+  CloudDownload,
   MoreVertical,
   Users,
   Package,
@@ -112,6 +114,7 @@ const Customers = () => {
   const [loadingStats, setLoadingStats] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingZoho, setSyncingZoho] = useState(false);
   const { toast } = useToast();
   const { user, hasAnyRole } = useAuth();
   const { logChange } = useAuditLog();
@@ -174,6 +177,26 @@ const Customers = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const syncCustomersFromZoho = async () => {
+    setSyncingZoho(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('zoho-sync', {
+        body: { action: 'fetch_customers' },
+      });
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || 'Sync failed');
+      toast({
+        title: 'Customers synced',
+        description: `${data.upserted} customers imported from Zoho${data.skipped > 0 ? `, ${data.skipped} skipped (no email)` : ''}.`,
+      });
+      fetchCustomers();
+    } catch (err: any) {
+      toast({ title: 'Sync failed', description: err.message || 'Could not sync from Zoho', variant: 'destructive' });
+    } finally {
+      setSyncingZoho(false);
     }
   };
 
@@ -591,6 +614,13 @@ const Customers = () => {
         </div>
 
         {canManage && (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={syncCustomersFromZoho} disabled={syncingZoho}>
+              {syncingZoho
+                ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                : <CloudDownload className="w-4 h-4 mr-2" />}
+              {syncingZoho ? 'Syncing...' : 'Sync from Zoho'}
+            </Button>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
@@ -776,6 +806,7 @@ const Customers = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          </div>
         )}
       </div>
 

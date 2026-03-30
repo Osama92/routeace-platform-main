@@ -678,6 +678,82 @@ serve(async (req) => {
         break;
       }
 
+      case 'fetch_customers': {
+        // Fetch all customers (contacts of type 'customer') from Zoho and upsert into local customers table
+        let page = 1;
+        const allContacts: any[] = [];
+        while (true) {
+          const res = await fetch(
+            `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_type=customer&page=${page}&per_page=200`,
+            { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
+          );
+          const data = await res.json();
+          const contacts: any[] = data.contacts || [];
+          allContacts.push(...contacts);
+          if (!data.page_context?.has_more_page) break;
+          page++;
+        }
+
+        let upserted = 0;
+        let skipped = 0;
+        for (const contact of allContacts) {
+          if (!contact.contact_name) { skipped++; continue; }
+          const phone = contact.phone || contact.mobile || '';
+          const email = contact.email || contact.contact_persons?.[0]?.email || '';
+          const contactPerson = contact.contact_persons?.[0];
+          const contactName = contactPerson
+            ? `${contactPerson.first_name || ''} ${contactPerson.last_name || ''}`.trim() || contact.contact_name
+            : contact.contact_name;
+
+          // Check if customer already exists by zoho_contact_id or company name
+          const { data: existing } = await supabase
+            .from('customers')
+            .select('id')
+            .eq('zoho_contact_id', contact.contact_id)
+            .maybeSingle();
+
+          if (existing) {
+            // Update existing
+            await supabase.from('customers').update({
+              company_name: contact.contact_name,
+              contact_name: contactName,
+              email: email || existing.id, // preserve existing email if Zoho has none
+              phone: phone,
+              zoho_contact_id: contact.contact_id,
+            }).eq('id', existing.id);
+          } else {
+            // Check by company name before inserting
+            const { data: byName } = await supabase
+              .from('customers')
+              .select('id, email')
+              .ilike('company_name', contact.contact_name)
+              .maybeSingle();
+
+            if (byName) {
+              await supabase.from('customers').update({
+                zoho_contact_id: contact.contact_id,
+                phone: phone || undefined,
+              }).eq('id', byName.id);
+            } else {
+              if (!email) { skipped++; continue; } // email is required
+              await supabase.from('customers').insert({
+                company_name: contact.contact_name,
+                contact_name: contactName,
+                email: email,
+                phone: phone || 'N/A',
+                zoho_contact_id: contact.contact_id,
+              });
+            }
+          }
+          upserted++;
+        }
+
+        result.total = allContacts.length;
+        result.upserted = upserted;
+        result.skipped = skipped;
+        break;
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }

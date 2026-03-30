@@ -254,6 +254,7 @@ const DriverPayrollPage = () => {
   const [selectedBatch, setSelectedBatch] = useState<PayrollBatch | null>(null);
   const [isBatchDialogOpen, setIsBatchDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("current");
+  const [driverTypeFilter, setDriverTypeFilter] = useState<"all" | "owned" | "3pl">("all");
   const { toast } = useToast();
 
   // Generate month options (last 12 months)
@@ -278,10 +279,10 @@ const DriverPayrollPage = () => {
   };
 
   const toggleSelectAll = () => {
-    if (selectedDriverIds.size === payrollData.length) {
+    if (selectedDriverIds.size === filteredPayrollData.length) {
       setSelectedDriverIds(new Set());
     } else {
-      setSelectedDriverIds(new Set(payrollData.map((p) => p.driver.id)));
+      setSelectedDriverIds(new Set(filteredPayrollData.map((p) => p.driver.id)));
     }
   };
 
@@ -358,7 +359,6 @@ const DriverPayrollPage = () => {
       const { data, error } = await supabase
         .from("drivers")
         .select("*")
-        .eq("driver_type", "owned")
         .order("full_name");
 
       if (error) throw error;
@@ -668,17 +668,25 @@ const DriverPayrollPage = () => {
     }
   }, [drivers, selectedMonth, tripRates]);
 
+  // Filter payroll by driver type
+  const filteredPayrollData = payrollData.filter((p) => {
+    if (driverTypeFilter === "all") return true;
+    if (driverTypeFilter === "owned") return !p.driver.driver_type || p.driver.driver_type === "owned";
+    if (driverTypeFilter === "3pl") return p.driver.driver_type === "3pl" || p.driver.driver_type === "vendor";
+    return true;
+  });
+
   // Summary calculations
   const totals = {
-    totalDrivers: payrollData.length,
-    totalGross: payrollData.reduce((acc, p) => acc + p.grossMonthly, 0),
-    totalTax: payrollData.reduce((acc, p) => acc + p.monthlyTax, 0),
-    totalNet: payrollData.reduce((acc, p) => acc + p.netMonthly, 0),
-    totalTrips: payrollData.reduce((acc, p) => acc + p.tripCount, 0),
-    totalTripsWithinZone: payrollData.reduce((acc, p) => acc + p.tripsWithinIbadan, 0),
-    totalTripsOutsideZone: payrollData.reduce((acc, p) => acc + p.tripsOutsideIbadan, 0),
-    avgEffectiveRate: payrollData.length > 0
-      ? payrollData.reduce((acc, p) => acc + p.effectiveRate, 0) / payrollData.length
+    totalDrivers: filteredPayrollData.length,
+    totalGross: filteredPayrollData.reduce((acc, p) => acc + p.grossMonthly, 0),
+    totalTax: filteredPayrollData.reduce((acc, p) => acc + p.monthlyTax, 0),
+    totalNet: filteredPayrollData.reduce((acc, p) => acc + p.netMonthly, 0),
+    totalTrips: filteredPayrollData.reduce((acc, p) => acc + p.tripCount, 0),
+    totalTripsWithinZone: filteredPayrollData.reduce((acc, p) => acc + p.tripsWithinIbadan, 0),
+    totalTripsOutsideZone: filteredPayrollData.reduce((acc, p) => acc + p.tripsOutsideIbadan, 0),
+    avgEffectiveRate: filteredPayrollData.length > 0
+      ? filteredPayrollData.reduce((acc, p) => acc + p.effectiveRate, 0) / filteredPayrollData.length
       : 0,
   };
 
@@ -1176,6 +1184,24 @@ const DriverPayrollPage = () => {
             </Card>
           </div>
 
+          {/* Driver Type Filter */}
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-sm text-muted-foreground font-medium">Show:</span>
+            {(["all", "owned", "3pl"] as const).map((type) => (
+              <button
+                key={type}
+                onClick={() => setDriverTypeFilter(type)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors border ${
+                  driverTypeFilter === type
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-secondary/50 text-muted-foreground border-border/50 hover:border-primary/50 hover:text-foreground"
+                }`}
+              >
+                {type === "all" ? `All (${payrollData.length})` : type === "owned" ? `Owned (${payrollData.filter(p => !p.driver.driver_type || p.driver.driver_type === "owned").length})` : `3PL (${payrollData.filter(p => p.driver.driver_type === "3pl" || p.driver.driver_type === "vendor").length})`}
+              </button>
+            ))}
+          </div>
+
           {/* Payroll Table */}
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -1185,8 +1211,8 @@ const DriverPayrollPage = () => {
             <Card>
               <CardContent className="text-center py-12">
                 <Users className="w-12 h-12 text-muted-foreground/50 mx-auto mb-3" />
-                <p className="text-muted-foreground">No owned drivers found</p>
-                <p className="text-sm text-muted-foreground/70">Add owned drivers with salary information to generate payroll reports</p>
+                <p className="text-muted-foreground">No drivers found</p>
+                <p className="text-sm text-muted-foreground/70">Add drivers with salary information to generate payroll reports</p>
               </CardContent>
             </Card>
           ) : (
@@ -1203,7 +1229,7 @@ const DriverPayrollPage = () => {
                     <TableRow>
                       <TableHead className="w-12">
                         <Checkbox
-                          checked={selectedDriverIds.size === payrollData.length && payrollData.length > 0}
+                          checked={selectedDriverIds.size === filteredPayrollData.length && filteredPayrollData.length > 0}
                           onCheckedChange={toggleSelectAll}
                         />
                       </TableHead>
@@ -1220,7 +1246,7 @@ const DriverPayrollPage = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {payrollData.map((payroll) => (
+                    {filteredPayrollData.map((payroll) => (
                       <TableRow key={payroll.driver.id} className={selectedDriverIds.has(payroll.driver.id) ? "bg-primary/5" : ""}>
                         <TableCell>
                           <Checkbox

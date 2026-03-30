@@ -66,6 +66,7 @@ const AnalyticsPage = () => {
 
   const [kpis, setKpis] = useState({
     totalDeliveries: 0,
+    otdPct: 0,
     avgTransitDays: 0,
     avgTargetDays: 0,
     revenueMtd: 0,
@@ -166,31 +167,34 @@ const AnalyticsPage = () => {
       // Total deliveries = completed (delivered) dispatches in the period
       const totalDeliveries = deliveredDispatches.length;
 
-      // OTD: average actual transit days vs average route target days
+      // OTD: count-based (same logic as MOM chart) — % of delivered trips that were on time
       const DEFAULT_ETA_DAYS_KPI = 2;
       let totalTransitDays = 0;
       let totalTargetDays = 0;
       let deliveryCount = 0;
+      let onTimeCount = 0;
       deliveredDispatches.forEach((d: any) => {
         const startD = d.actual_pickup || d.scheduled_pickup || d.created_at;
         if (startD && d.actual_delivery) {
           const ms = new Date(d.actual_delivery).getTime() - new Date(startD).getTime();
           if (ms < 0) return;
           deliveryCount++;
-          totalTransitDays += ms / (1000 * 60 * 60 * 24); // actual fractional days
+          totalTransitDays += ms / (1000 * 60 * 60 * 24);
           const routeRow = Array.isArray(d.routes) ? d.routes[0] : d.routes;
           totalTargetDays += routeRow?.estimated_duration_hours ? Number(routeRow.estimated_duration_hours) : DEFAULT_ETA_DAYS_KPI;
+          if (isOnTime(d)) onTimeCount++;
         }
       });
       const avgTransitDays = deliveryCount > 0 ? Math.round((totalTransitDays / deliveryCount) * 10) / 10 : 0;
       const avgTargetDays = deliveryCount > 0 ? Math.round((totalTargetDays / deliveryCount) * 10) / 10 : DEFAULT_ETA_DAYS_KPI;
+      const otdPct = deliveryCount > 0 ? Math.round((onTimeCount / deliveryCount) * 100) : 0;
 
       const revenueMtd = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0) || 0;
 
       const totalDistance = allDispatches.reduce((sum, d) => sum + Number(d.distance_km || 0), 0);
       const avgDistance = totalDeliveries > 0 ? totalDistance / totalDeliveries : 0;
 
-      setKpis({ totalDeliveries, avgTransitDays, avgTargetDays, revenueMtd, avgDistance });
+      setKpis({ totalDeliveries, otdPct, avgTransitDays, avgTargetDays, revenueMtd, avgDistance });
 
       // Generate delivery trend: daily buckets across selected range
       const deliveryTrend: any[] = [];
@@ -619,18 +623,12 @@ const AnalyticsPage = () => {
             icon: Truck,
           },
           {
-            title: "Avg Transit Days",
-            value: kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d` : "—",
-            change: kpis.avgTransitDays > 0
-              ? (() => {
-                  const otdPct = Math.round((kpis.avgTargetDays / kpis.avgTransitDays) * 100);
-                  const status = kpis.avgTransitDays <= kpis.avgTargetDays
-                    ? `On Track (${otdPct}%)`
-                    : `+${(kpis.avgTransitDays - kpis.avgTargetDays).toFixed(1)}d over (${otdPct}%)`;
-                  return `Target: ${kpis.avgTargetDays}d — ${status}`;
-                })()
+            title: "On-Time Delivery (OTD)",
+            value: kpis.totalDeliveries > 0 ? `${kpis.otdPct}%` : "—",
+            change: kpis.totalDeliveries > 0
+              ? `${Math.round((kpis.otdPct / 100) * kpis.totalDeliveries)} of ${kpis.totalDeliveries} trips on time · Avg ${kpis.avgTransitDays}d`
               : "No deliveries yet",
-            positive: kpis.avgTransitDays === 0 || kpis.avgTransitDays <= kpis.avgTargetDays,
+            positive: kpis.otdPct >= 80,
             icon: Clock,
           },
           // Only show Revenue KPI for non-Operations users
