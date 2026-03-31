@@ -37,9 +37,11 @@ const Dashboard = () => {
 
   const [kpis, setKpis] = useState({
     activeShipments: 0,
-    totalDeliveriesMtd: 0,   // completed (delivered) dispatches this month — mirrors Analytics "Total Deliveries"
-    avgTransitDays: 0,       // actual average days in transit (delivered dispatches MTD)
-    avgTargetDays: 0,        // average route ETA days (target) for those same dispatches
+    totalDeliveriesMtd: 0,
+    otdPct: 0,               // % of deliveries on or before scheduled_delivery (or ETA fallback)
+    onTimeCount: 0,
+    avgTransitDays: 0,
+    avgTargetDays: 0,
     fleetUtilizationText: "—",
     totalDistanceKm: 0,
     revenueMtd: 0,
@@ -130,29 +132,49 @@ const Dashboard = () => {
 
       const { data: deliveredWithDates } = await supabase
         .from("dispatches")
-        .select("id, actual_pickup, scheduled_pickup, actual_delivery, created_at, routes:route_id (estimated_duration_hours)")
+        .select("id, actual_pickup, scheduled_pickup, actual_delivery, scheduled_delivery, created_at, routes:route_id (estimated_duration_hours)")
         .eq("status", "delivered")
         .gte("created_at", start);
 
       let totalTransitDays = 0;
       let totalTargetDays = 0;
       let deliveryCount = 0;
+      let onTimeCount = 0;
 
       (deliveredWithDates || []).forEach((dispatch: any) => {
-        const startDate = dispatch.actual_pickup || dispatch.scheduled_pickup || dispatch.created_at;
         const deliveryDate = dispatch.actual_delivery;
+        if (!deliveryDate) return;
+
+        const startDate = dispatch.actual_pickup || dispatch.scheduled_pickup || dispatch.created_at;
         const routeRow = Array.isArray(dispatch.routes) ? dispatch.routes[0] : dispatch.routes;
         const routeEtaDays = routeRow?.estimated_duration_hours;
 
+        // Standard OTD: delivered on or before the promised date
+        if (dispatch.scheduled_delivery) {
+          if (new Date(deliveryDate).getTime() <= new Date(dispatch.scheduled_delivery).getTime()) {
+            onTimeCount++;
+          }
+        } else if (startDate) {
+          // Fallback: within route ETA from pickup
+          const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
+          if (msInTransit >= 0) {
+            const hoursInTransit = msInTransit / (1000 * 60 * 60);
+            const etaHours = routeEtaDays ? Number(routeEtaDays) * 24 : DEFAULT_ETA_DAYS * 24;
+            if (hoursInTransit <= etaHours) onTimeCount++;
+          }
+        }
+
         if (startDate && deliveryDate) {
           const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
-          if (msInTransit < 0) return; // skip bad data
+          if (msInTransit < 0) return;
           deliveryCount++;
-          totalTransitDays += msInTransit / (1000 * 60 * 60 * 24); // fractional days (consistent with Analytics)
+          totalTransitDays += msInTransit / (1000 * 60 * 60 * 24);
           totalTargetDays += routeEtaDays ? Number(routeEtaDays) : DEFAULT_ETA_DAYS;
         }
       });
 
+      const totalDelivered = deliveredWithDates?.length || 0;
+      const otdPct = totalDelivered > 0 ? Math.round((onTimeCount / totalDelivered) * 100) : 0;
       const avgTransitDays = deliveryCount > 0
         ? Math.round((totalTransitDays / deliveryCount) * 10) / 10
         : 0;
@@ -183,6 +205,8 @@ const Dashboard = () => {
       setKpis({
         activeShipments: activeCount || 0,
         totalDeliveriesMtd: deliveredMtdCount || 0,
+        otdPct,
+        onTimeCount,
         avgTransitDays,
         avgTargetDays,
         fleetUtilizationText,
@@ -208,14 +232,14 @@ const Dashboard = () => {
           isFinancial: false,
         },
         {
-          title: "Avg Transit Days (MTD)",
-          value: kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d` : "—",
-          change: kpis.avgTransitDays > 0
-            ? `Target: ${kpis.avgTargetDays}d — ${kpis.avgTransitDays <= kpis.avgTargetDays ? "On Track" : `+${(kpis.avgTransitDays - kpis.avgTargetDays).toFixed(1)}d over`}`
+          title: "On-Time Delivery (OTD)",
+          value: kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d avg` : "—",
+          change: kpis.totalDeliveriesMtd > 0
+            ? `${kpis.otdPct}% OTD · ${kpis.onTimeCount}/${kpis.totalDeliveriesMtd} on time`
             : "No deliveries yet",
-          changeType: kpis.avgTransitDays === 0 ? "neutral" as const
-            : kpis.avgTransitDays <= kpis.avgTargetDays ? "positive" as const
-            : kpis.avgTransitDays <= kpis.avgTargetDays + 1 ? "neutral" as const
+          changeType: kpis.otdPct === 0 ? "neutral" as const
+            : kpis.otdPct >= 80 ? "positive" as const
+            : kpis.otdPct >= 60 ? "neutral" as const
             : "negative" as const,
           icon: Clock,
           link: "/dispatch",

@@ -61,6 +61,7 @@ import {
   Pencil,
   X,
   CalendarDays,
+  CloudDownload,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -223,6 +224,7 @@ const InvoicesPage = () => {
   const [saving, setSaving] = useState(false);
   const [pdfDownloading, setPdfDownloading] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [syncingCustomers, setSyncingCustomers] = useState(false);
   const { toast } = useToast();
   const { user, hasAnyRole, userRole } = useAuth();
   const { logChange } = useAuditLog();
@@ -417,6 +419,29 @@ const InvoicesPage = () => {
       .select("id, company_name")
       .order("company_name");
     setCustomers(data || []);
+  };
+
+  const syncCustomersFromZoho = async () => {
+    setSyncingCustomers(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("zoho-sync", {
+        body: { action: "fetch_customers" },
+      });
+      if (error) throw error;
+      await fetchCustomers();
+      toast({
+        title: "Customers synced",
+        description: `${data?.upserted ?? 0} customer(s) synced from Zoho.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Sync failed",
+        description: err?.message || "Could not sync customers from Zoho.",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingCustomers(false);
+    }
   };
 
   const fetchDispatches = async () => {
@@ -1467,7 +1492,20 @@ const InvoicesPage = () => {
 
                         {/* Customer Selection */}
                         <div className="space-y-2">
-                          <Label htmlFor="customer_id">Customer *</Label>
+                          <div className="flex items-center justify-between">
+                            <Label htmlFor="customer_id">Customer *</Label>
+                            <button
+                              type="button"
+                              onClick={syncCustomersFromZoho}
+                              disabled={syncingCustomers}
+                              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                            >
+                              {syncingCustomers
+                                ? <RefreshCw className="w-3 h-3 animate-spin" />
+                                : <CloudDownload className="w-3 h-3" />}
+                              Sync from Zoho
+                            </button>
+                          </div>
                           <Select
                             value={formData.customer_id}
                             onValueChange={(value) => setFormData(prev => ({ ...prev, customer_id: value }))}
@@ -2058,7 +2096,20 @@ const InvoicesPage = () => {
 
                 {/* Customer Selection */}
                 <div className="space-y-2">
-                  <Label htmlFor="edit_customer_id">Customer *</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="edit_customer_id">Customer *</Label>
+                    <button
+                      type="button"
+                      onClick={syncCustomersFromZoho}
+                      disabled={syncingCustomers}
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      {syncingCustomers
+                        ? <RefreshCw className="w-3 h-3 animate-spin" />
+                        : <CloudDownload className="w-3 h-3" />}
+                      Sync from Zoho
+                    </button>
+                  </div>
                   <Select
                     value={formData.customer_id}
                     onValueChange={(value) => setFormData(prev => ({ ...prev, customer_id: value }))}

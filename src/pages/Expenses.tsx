@@ -52,6 +52,7 @@ import {
   Package,
   ExternalLink,
   Pencil,
+  CloudDownload,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -154,6 +155,7 @@ const Expenses = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [syncingBankAccounts, setSyncingBankAccounts] = useState(false);
+  const [syncingCustomers, setSyncingCustomers] = useState(false);
   const [manageBankOpen, setManageBankOpen] = useState(false);
   const [editingAccountNumbers, setEditingAccountNumbers] = useState<Record<string, string>>({});
   const [savingAccountNumbers, setSavingAccountNumbers] = useState(false);
@@ -508,6 +510,30 @@ const Expenses = () => {
       toast({ title: "Sync Error", description: error.message || "Failed to sync bank accounts", variant: "destructive" });
     } finally {
       setSyncingBankAccounts(false);
+    }
+  };
+
+  const syncCustomersFromZoho = async () => {
+    setSyncingCustomers(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("zoho-sync", {
+        body: { action: "fetch_customers" },
+      });
+      if (error) throw error;
+      const res = await supabase.from("customers").select("id, company_name").order("company_name");
+      setCustomers((res.data as Customer[]) || []);
+      toast({
+        title: "Customers synced",
+        description: `${data?.upserted ?? 0} customer(s) synced from Zoho.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Sync failed",
+        description: err?.message || "Could not sync customers from Zoho.",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingCustomers(false);
     }
   };
 
@@ -915,7 +941,20 @@ const Expenses = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="customer_id">Customer <span className="text-muted-foreground font-normal">(optional — for analytics reporting)</span></Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="customer_id">Customer <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                      <button
+                        type="button"
+                        onClick={syncCustomersFromZoho}
+                        disabled={syncingCustomers}
+                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                      >
+                        {syncingCustomers
+                          ? <RefreshCw className="w-3 h-3 animate-spin" />
+                          : <CloudDownload className="w-3 h-3" />}
+                        Sync from Zoho
+                      </button>
+                    </div>
                     <Select
                       value={formData.customer_id}
                       onValueChange={(value) => setFormData((prev) => ({ ...prev, customer_id: value }))}

@@ -106,16 +106,20 @@ const AnalyticsPage = () => {
 
       const DEFAULT_ETA_DAYS = 2;
 
-      // Helper: is a delivered dispatch on-time based on route ETA?
-      // Start priority: actual_pickup → scheduled_pickup → created_at (covers all dispatch flows)
+      // Standard OTD formula: actual_delivery ≤ promised delivery date (scheduled_delivery).
+      // Fallback: if no scheduled_delivery set, use route ETA hours from pickup as the promise.
       const isOnTime = (d: any): boolean => {
-        const startDate = d.actual_pickup || d.scheduled_pickup || d.created_at;
         const deliveryDate = d.actual_delivery;
-        if (!startDate || !deliveryDate) return false;
+        if (!deliveryDate) return false;
+        // Primary: compare against the committed delivery date
+        if (d.scheduled_delivery) {
+          return new Date(deliveryDate).getTime() <= new Date(d.scheduled_delivery).getTime();
+        }
+        // Fallback: derive promised time from pickup + route ETA
+        const startDate = d.actual_pickup || d.scheduled_pickup || d.created_at;
+        if (!startDate) return false;
         const msInTransit = new Date(deliveryDate).getTime() - new Date(startDate).getTime();
         if (msInTransit < 0) return false;
-        // Compare actual hours against ETA hours directly — avoids Math.ceil rounding
-        // e.g. 24.5 hours vs 24hr ETA → late, but 23.5 hours → on time
         const hoursInTransit = msInTransit / (1000 * 60 * 60);
         const routeRow = Array.isArray(d.routes) ? d.routes[0] : d.routes;
         const etaHours = routeRow?.estimated_duration_hours
@@ -127,7 +131,7 @@ const AnalyticsPage = () => {
       // Fetch dispatches in date range — exclude historical (same logic as Dispatch page date filter)
       const { data: dispatches } = await supabase
         .from("dispatches")
-        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, delay_reason, dispatch_number, vendor_delay_note, routes:route_id(estimated_duration_hours), vehicles:vehicle_id(registration_number, truck_type), customers:customer_id(company_name), drivers:driver_id(full_name)")
+        .select("id, status, distance_km, actual_pickup, scheduled_pickup, actual_delivery, scheduled_delivery, pickup_address, delivery_address, created_at, vehicle_id, is_historical, delay_reason, dispatch_number, vendor_delay_note, routes:route_id(estimated_duration_hours), vehicles:vehicle_id(registration_number, truck_type), customers:customer_id(company_name), drivers:driver_id(full_name)")
         .gte("created_at", startISO)
         .lte("created_at", endISO)
         .or("is_historical.is.null,is_historical.eq.false");
@@ -420,7 +424,7 @@ const AnalyticsPage = () => {
         const monthEnd = format(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0), "yyyy-MM-dd") + "T23:59:59";
         const { data: mDispatches } = await supabase
           .from("dispatches")
-          .select("status, actual_pickup, scheduled_pickup, actual_delivery, created_at, routes:route_id(estimated_duration_hours)")
+          .select("status, actual_pickup, scheduled_pickup, actual_delivery, scheduled_delivery, created_at, routes:route_id(estimated_duration_hours)")
           .eq("status", "delivered")
           .gte("created_at", monthStart)
           .lte("created_at", monthEnd)
@@ -624,9 +628,9 @@ const AnalyticsPage = () => {
           },
           {
             title: "On-Time Delivery (OTD)",
-            value: kpis.totalDeliveries > 0 ? `${kpis.otdPct}%` : "—",
+            value: kpis.avgTransitDays > 0 ? `${kpis.avgTransitDays}d avg` : "—",
             change: kpis.totalDeliveries > 0
-              ? `${Math.round((kpis.otdPct / 100) * kpis.totalDeliveries)} of ${kpis.totalDeliveries} trips on time · Avg ${kpis.avgTransitDays}d`
+              ? `${kpis.otdPct}% OTD · ${Math.round((kpis.otdPct / 100) * kpis.totalDeliveries)}/${kpis.totalDeliveries} on time`
               : "No deliveries yet",
             positive: kpis.otdPct >= 80,
             icon: Clock,
@@ -816,25 +820,26 @@ const AnalyticsPage = () => {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={momOTD} barSize={32}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="month" fontSize={12} tickLine={false} stroke="hsl(var(--muted-foreground))" tick={{ fill: "hsl(var(--muted-foreground))" }} />
-                <YAxis domain={[0, 100]} unit="%" fontSize={12} tickLine={false} stroke="hsl(var(--muted-foreground))" tick={{ fill: "hsl(var(--muted-foreground))" }} />
+                <XAxis dataKey="month" fontSize={12} tickLine={false} stroke="hsl(var(--muted-foreground))" tick={{ fill: "hsl(var(--foreground))" }} />
+                <YAxis domain={[0, 100]} unit="%" fontSize={12} tickLine={false} stroke="hsl(var(--muted-foreground))" tick={{ fill: "hsl(var(--foreground))" }} />
                 <Tooltip
                   contentStyle={{ backgroundColor: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: "8px", color: "hsl(var(--popover-foreground))" }}
                   labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                  itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                   formatter={(value: number, _: string, props: any) => [`${value}% (${props.payload.total} trips)`, "OTD"]}
                 />
                 <Bar dataKey="otd" radius={[4, 4, 0, 0]} name="OTD %">
                   {momOTD.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.otd >= 80 ? "hsl(142, 76%, 36%)" : entry.otd >= 60 ? "hsl(38, 92%, 50%)" : "hsl(0, 72%, 51%)"} />
+                    <Cell key={`cell-${index}`} fill={entry.otd >= 80 ? "hsl(142, 69%, 58%)" : entry.otd >= 60 ? "hsl(38, 92%, 50%)" : "hsl(0, 72%, 60%)"} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
           <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(142, 76%, 36%)" }} /> ≥80% On Track</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(142, 69%, 58%)" }} /> ≥80% On Track</span>
             <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(38, 92%, 50%)" }} /> 60–79% Watch</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(0, 72%, 51%)" }} /> &lt;60% At Risk</span>
+            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "hsl(0, 72%, 60%)" }} /> &lt;60% At Risk</span>
           </div>
         </motion.div>
 
