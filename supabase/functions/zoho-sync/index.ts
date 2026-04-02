@@ -754,6 +754,86 @@ serve(async (req) => {
         break;
       }
 
+      case 'sync_back_to_back': {
+        const { expenseId, invoiceId, paymentDate } = body;
+
+        // Fetch expense from DB (includes payment_account_id for bank lookup inside syncExpenseToZoho)
+        const { data: btbExpense, error: expFetchErr } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('id', expenseId)
+          .single();
+        if (expFetchErr || !btbExpense) throw new Error('Expense not found: ' + (expFetchErr?.message || expenseId));
+
+        // Fetch invoice + customer from DB
+        const { data: btbInvoice, error: invFetchErr } = await supabase
+          .from('invoices')
+          .select('*, customers(company_name, zoho_contact_id)')
+          .eq('id', invoiceId)
+          .single();
+        if (invFetchErr || !btbInvoice) throw new Error('Invoice not found: ' + (invFetchErr?.message || invoiceId));
+
+        // 1. Sync expense to Zoho (marks as paid via paid_through_account_id)
+        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, btbExpense, supabase);
+        if (zohoExpenseId) {
+          await supabase.from('expenses')
+            .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
+            .eq('id', expenseId);
+        }
+
+        // 2. Sync invoice to Zoho (creates invoice record)
+        const customerName = (btbInvoice.customers as any)?.company_name || '';
+        const zohoInvoiceId = await syncInvoiceToZoho(accessToken, organizationId, btbInvoice, customerName);
+        if (zohoInvoiceId) {
+          await supabase.from('invoices')
+            .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
+            .eq('id', invoiceId);
+        }
+
+        // 3. Mark invoice as paid in Zoho via customer payment (using same bank account)
+        if (zohoInvoiceId && btbExpense.payment_account_id) {
+          const { data: bankAcct } = await supabase
+            .from('bank_accounts')
+            .select('zoho_account_id')
+            .eq('id', btbExpense.payment_account_id)
+            .maybeSingle();
+
+          const zohoAccountId = (bankAcct as any)?.zoho_account_id;
+          const zohoCustomerId = (btbInvoice.customers as any)?.zoho_contact_id;
+
+          if (zohoAccountId && zohoCustomerId) {
+            const paymentRes = await fetch(
+              `${ZOHO_BOOKS_URL()}/customerpayments?organization_id=${organizationId}`,
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Zoho-oauthtoken ${accessToken}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  customer_id: zohoCustomerId,
+                  payment_mode: 'cash',
+                  amount: btbInvoice.total_amount,
+                  date: paymentDate || btbInvoice.invoice_date,
+                  invoices: [{ invoice_id: zohoInvoiceId, amount_applied: btbInvoice.total_amount }],
+                  account_id: zohoAccountId,
+                  description: `Back-to-back payment — ${btbInvoice.invoice_number}`,
+                }),
+              }
+            );
+            const paymentResult = await paymentRes.json();
+            if (paymentResult.code !== 0) {
+              console.warn('Zoho customer payment recording failed (non-critical):', paymentResult.message);
+            }
+          }
+        }
+
+        result.success = true;
+        result.zoho_expense_id = zohoExpenseId;
+        result.zoho_invoice_id = zohoInvoiceId;
+        break;
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }
