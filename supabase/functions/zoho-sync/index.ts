@@ -754,6 +754,146 @@ serve(async (req) => {
         break;
       }
 
+      case 'fetch_bills': {
+        // Pull vendor bills from Zoho Books and upsert into local bills table
+        let page = 1;
+        let hasMore = true;
+        let upserted = 0;
+
+        while (hasMore) {
+          const res = await fetch(
+            `${ZOHO_BOOKS_URL()}/bills?organization_id=${organizationId}&page=${page}&per_page=200`,
+            { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
+          );
+          const data = await res.json();
+          const zohoBills: any[] = data.bills || [];
+          hasMore = data.page_context?.has_more_page === true;
+          page++;
+
+          for (const zb of zohoBills) {
+            // Try to match vendor by name to a local partner
+            let vendorId: string | null = null;
+            if (zb.vendor_name) {
+              const { data: partner } = await supabase
+                .from('partners')
+                .select('id')
+                .ilike('company_name', zb.vendor_name)
+                .maybeSingle();
+              vendorId = partner?.id || null;
+            }
+
+            const billPayload = {
+              bill_number: zb.bill_number || zb.reference_number || null,
+              vendor_id: vendorId,
+              vendor_name: zb.vendor_name || null,
+              bill_date: zb.date || new Date().toISOString().split('T')[0],
+              due_date: zb.due_date || null,
+              amount: Number(zb.total || 0),
+              paid_amount: Number(zb.payment_made || 0),
+              status: zb.status === 'paid' ? 'paid' : zb.status === 'open' ? 'open' : zb.status === 'partial' ? 'partial' : zb.status === 'void' ? 'void' : 'open',
+              zoho_bill_id: zb.bill_id,
+              zoho_synced_at: new Date().toISOString(),
+            };
+
+            // Upsert by zoho_bill_id
+            const { data: existing } = await supabase
+              .from('bills' as any)
+              .select('id')
+              .eq('zoho_bill_id', zb.bill_id)
+              .maybeSingle();
+
+            if (existing) {
+              await supabase.from('bills' as any).update(billPayload).eq('id', existing.id);
+            } else {
+              await supabase.from('bills' as any).insert({ ...billPayload, paid_amount: billPayload.paid_amount || 0 });
+            }
+            upserted++;
+          }
+
+          if (zohoBills.length < 200) hasMore = false;
+        }
+
+        result.success = true;
+        result.upserted = upserted;
+        break;
+      }
+
+      case 'sync_bill': {
+        // Push a local bill to Zoho Books as a vendor bill
+        const { billId } = body;
+        const { data: bill, error: billErr } = await supabase
+          .from('bills' as any)
+          .select('*')
+          .eq('id', billId)
+          .single();
+
+        if (billErr || !bill) throw new Error('Bill not found: ' + billId);
+
+        // Resolve vendor contact in Zoho
+        let zohoVendorId: string | null = null;
+        if ((bill as any).vendor_name) {
+          const contactsRes = await fetch(
+            `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name=${encodeURIComponent((bill as any).vendor_name)}&contact_type=vendor`,
+            { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` } }
+          );
+          const contactsData = await contactsRes.json();
+          zohoVendorId = contactsData.contacts?.[0]?.contact_id || null;
+        }
+
+        if (!zohoVendorId) throw new Error(`Vendor "${(bill as any).vendor_name}" not found in Zoho. Please add them as a vendor contact in Zoho Books first.`);
+
+        const billPayload = {
+          vendor_id: zohoVendorId,
+          date: (bill as any).bill_date,
+          due_date: (bill as any).due_date || undefined,
+          reference_number: (bill as any).bill_number || undefined,
+          notes: (bill as any).notes || undefined,
+          line_items: [{
+            description: (bill as any).notes || 'Vendor bill',
+            quantity: 1,
+            rate: Number((bill as any).amount),
+          }],
+        };
+
+        let zohoBillId = (bill as any).zoho_bill_id;
+
+        if (zohoBillId) {
+          // Update existing
+          const updateRes = await fetch(
+            `${ZOHO_BOOKS_URL()}/bills/${zohoBillId}?organization_id=${organizationId}`,
+            {
+              method: 'PUT',
+              headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(billPayload),
+            }
+          );
+          const updateData = await updateRes.json();
+          if (updateData.bill?.bill_id) zohoBillId = updateData.bill.bill_id;
+          else throw new Error(updateData.message || 'Failed to update bill in Zoho');
+        } else {
+          // Create new
+          const createRes = await fetch(
+            `${ZOHO_BOOKS_URL()}/bills?organization_id=${organizationId}`,
+            {
+              method: 'POST',
+              headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(billPayload),
+            }
+          );
+          const createData = await createRes.json();
+          if (createData.bill?.bill_id) zohoBillId = createData.bill.bill_id;
+          else throw new Error(createData.message || 'Failed to create bill in Zoho');
+        }
+
+        await supabase.from('bills' as any)
+          .update({ zoho_bill_id: zohoBillId, zoho_synced_at: new Date().toISOString() })
+          .eq('id', billId);
+
+        result.success = true;
+        result.zoho_bill_id = zohoBillId;
+        break;
+      }
+
       default:
         throw new Error(`Unknown action: ${action}`);
     }

@@ -48,6 +48,7 @@ const navigation = [
   { name: "Partner Performance", href: "/vendor-performance", icon: TrendingUp, roles: ["admin", "operations"] }, // Keep but hide revenue
   { name: "Invoices", href: "/invoices", icon: FileText, roles: ["admin", "support", "operations"] },
   { name: "Expenses", href: "/expenses", icon: CircleDollarSign, roles: ["admin", "operations"] },
+  { name: "Bills", href: "/bills", icon: FileText, roles: ["admin", "operations"] },
   { name: "Analytics", href: "/analytics", icon: BarChart3, roles: ["admin", "operations"] }, // Keep but hide revenue
 ];
 
