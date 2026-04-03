@@ -57,7 +57,7 @@ interface LineItem {
   account: string;
   quantity: number;
   rate: number;
-  tax_pct: number;
+  vat_type: "none" | "inclusive" | "exclusive";
   customer_id: string;
 }
 
@@ -133,7 +133,7 @@ const newLineItem = (): LineItem => ({
   account: "",
   quantity: 1,
   rate: 0,
-  tax_pct: 0,
+  vat_type: "none" as const,
   customer_id: "",
 });
 
@@ -227,7 +227,11 @@ const Bills = () => {
 
   // ── totals ─────────────────────────────────────────────────────
   const subtotal = formData.line_items.reduce((s, l) => s + (Number(l.quantity) * Number(l.rate)), 0);
-  const taxAmount = formData.line_items.reduce((s, l) => s + (Number(l.quantity) * Number(l.rate) * Number(l.tax_pct) / 100), 0);
+  const taxAmount = formData.line_items.reduce((s, l) => {
+    const lineTotal = Number(l.quantity) * Number(l.rate);
+    if (l.vat_type === "exclusive") return s + lineTotal * 0.075;
+    return s; // inclusive VAT is embedded; none = 0
+  }, 0);
   const discountAmt = subtotal * (Number(formData.discount_pct) / 100);
   const total = subtotal + taxAmount - discountAmt + Number(formData.adjustment);
 
@@ -422,7 +426,7 @@ const Bills = () => {
                       <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[18%]">Account</th>
                       <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[8%]">Qty</th>
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[10%]">Rate (₦)</th>
-                      <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[8%]">Tax %</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[12%]">VAT</th>
                       <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[18%]">Customer</th>
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[8%]">Amount</th>
                       <th className="w-8"></th>
@@ -459,9 +463,16 @@ const Bills = () => {
                               className="bg-transparent border-0 shadow-none focus-visible:ring-0 text-right px-1 text-sm" />
                           </td>
                           <td className="px-2 py-1.5">
-                            <Input type="number" value={line.tax_pct} min={0} max={100}
-                              onChange={e => updateLine(line.id, "tax_pct", e.target.value)}
-                              className="bg-transparent border-0 shadow-none focus-visible:ring-0 text-center px-1 text-sm w-16" />
+                            <Select value={line.vat_type} onValueChange={v => updateLine(line.id, "vat_type", v)}>
+                              <SelectTrigger className="bg-transparent border-0 shadow-none focus:ring-0 text-sm h-8 min-w-[130px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">No VAT</SelectItem>
+                                <SelectItem value="inclusive">VAT Inclusive</SelectItem>
+                                <SelectItem value="exclusive">VAT Exclusive</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </td>
                           <td className="px-2 py-1.5">
                             <Select value={line.customer_id} onValueChange={v => updateLine(line.id, "customer_id", v)}>
