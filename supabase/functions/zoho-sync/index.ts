@@ -504,8 +504,8 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { action, invoiceId, expenseId, direction = 'to_zoho' } = await req.json();
-    console.log('Zoho sync request:', { action, invoiceId, expenseId, direction });
+    const { action, invoiceId, expenseId, billId, direction = 'to_zoho' } = await req.json();
+    console.log('Zoho sync request:', { action, invoiceId, expenseId, billId, direction });
 
     const accessToken = await getZohoAccessToken();
 
@@ -820,7 +820,6 @@ serve(async (req) => {
 
       case 'sync_bill': {
         // Push a local bill to Zoho Books as a vendor bill
-        const { billId } = body;
         const { data: bill, error: billErr } = await supabase
           .from('bills' as any)
           .select('*')

@@ -55,6 +55,7 @@ interface LineItem {
   id: string;
   item_details: string;
   account: string;
+  tonnage: string;
   quantity: number;
   rate: number;
   vat_type: "none" | "inclusive" | "exclusive";
@@ -131,6 +132,7 @@ const newLineItem = (): LineItem => ({
   id: crypto.randomUUID(),
   item_details: "",
   account: "",
+  tonnage: "",
   quantity: 1,
   rate: 0,
   vat_type: "none" as const,
@@ -422,12 +424,13 @@ const Bills = () => {
                 <table className="w-full text-sm">
                   <thead className="bg-secondary/40">
                     <tr>
-                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[28%]">Item Details</th>
-                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[18%]">Account</th>
-                      <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[8%]">Qty</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[22%]">Item Details</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[14%]">Account</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[10%]">Tonnage</th>
+                      <th className="text-center px-3 py-2 font-medium text-muted-foreground w-[6%]">Qty</th>
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[10%]">Rate (₦)</th>
                       <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[12%]">VAT</th>
-                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[18%]">Customer</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground w-[14%]">Customer</th>
                       <th className="text-right px-3 py-2 font-medium text-muted-foreground w-[8%]">Amount</th>
                       <th className="w-8"></th>
                     </tr>
@@ -449,6 +452,25 @@ const Bills = () => {
                               </SelectTrigger>
                               <SelectContent>
                                 {ACCOUNTS.map(a => <SelectItem key={a} value={a}>{a}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <Select value={line.tonnage} onValueChange={v => updateLine(line.id, "tonnage", v)}>
+                              <SelectTrigger className="bg-transparent border-0 shadow-none focus:ring-0 text-sm h-8">
+                                <SelectValue placeholder="Select..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="1T">1T</SelectItem>
+                                <SelectItem value="2T">2T</SelectItem>
+                                <SelectItem value="3T">3T</SelectItem>
+                                <SelectItem value="5T">5T</SelectItem>
+                                <SelectItem value="10T">10T</SelectItem>
+                                <SelectItem value="15T">15T</SelectItem>
+                                <SelectItem value="20T">20T</SelectItem>
+                                <SelectItem value="25T">25T</SelectItem>
+                                <SelectItem value="30T">30T</SelectItem>
+                                <SelectItem value="40T">40T</SelectItem>
                               </SelectContent>
                             </Select>
                           </td>
