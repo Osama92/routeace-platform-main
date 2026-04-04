@@ -842,18 +842,55 @@ serve(async (req) => {
 
         if (!zohoVendorId) throw new Error(`Vendor "${(bill as any).vendor_name}" not found in Zoho. Please add them as a vendor contact in Zoho Books first.`);
 
-        const billPayload = {
+        // Build line items from stored JSON, falling back to single line
+        const storedLines: any[] = (bill as any).line_items || [];
+        const zohoLineItems = storedLines.length > 0
+          ? storedLines.map((l: any) => {
+              const item: any = {
+                description: l.description || 'Line item',
+                quantity: Number(l.quantity) || 1,
+                rate: Number(l.rate) || 0,
+              };
+              // Map account to Zoho account name
+              if (l.account) {
+                const acctMap: Record<string, string> = {
+                  fuel: 'Fuel/Mileage Expenses', maintenance: 'Repairs and Maintenance',
+                  cogs: 'Cost of Goods Sold', insurance: 'Insurance',
+                  tolls: 'Travel Expenses', rent: 'Rent Expense',
+                  utilities: 'Electricity and Gas', equipment: 'Equipment Rental',
+                  administrative: 'Office Supplies', marketing: 'Advertising And Marketing',
+                  other: 'Miscellaneous Expenses',
+                };
+                item.account_name = acctMap[l.account] || 'Miscellaneous Expenses';
+              }
+              // VAT: exclusive adds tax_percentage; inclusive = tax embedded; none = no tax
+              if (l.vat_type === 'exclusive') {
+                item.tax_percentage = 7.5;
+              }
+              return item;
+            })
+          : [{ description: (bill as any).notes || 'Vendor bill', quantity: 1, rate: Number((bill as any).amount) }];
+
+        const billPayload: any = {
           vendor_id: zohoVendorId,
           date: (bill as any).bill_date,
           due_date: (bill as any).due_date || undefined,
           reference_number: (bill as any).bill_number || undefined,
           notes: (bill as any).notes || undefined,
-          line_items: [{
-            description: (bill as any).notes || 'Vendor bill',
-            quantity: 1,
-            rate: Number((bill as any).amount),
-          }],
+          line_items: zohoLineItems,
         };
+
+        // Apply discount if present
+        if ((bill as any).discount_pct && Number((bill as any).discount_pct) > 0) {
+          billPayload.discount = Number((bill as any).discount_pct);
+          billPayload.is_discount_before_tax = true;
+          billPayload.discount_type = 'entity_level';
+        }
+
+        // Apply adjustment if present
+        if ((bill as any).adjustment && Number((bill as any).adjustment) !== 0) {
+          billPayload.adjustment = Number((bill as any).adjustment);
+        }
 
         let zohoBillId = (bill as any).zoho_bill_id;
 
