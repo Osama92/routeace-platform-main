@@ -315,6 +315,14 @@ const Bills = () => {
     fetchData();
   };
 
+  const deleteBill = async (bill: Bill) => {
+    if (!confirm(`Delete bill ${bill.bill_number || bill.id}? This cannot be undone.`)) return;
+    const { error } = await (supabase as any).from("bills").delete().eq("id", bill.id);
+    if (error) { toast({ title: "Delete failed", description: error.message, variant: "destructive" }); return; }
+    toast({ title: "Bill deleted" });
+    fetchData();
+  };
+
   const syncToZoho = async (billId: string) => {
     setSyncing(true);
     try {
@@ -738,6 +746,11 @@ const Bills = () => {
                           <DropdownMenuItem onClick={() => syncToZoho(bill.id)} disabled={syncing}>
                             <CloudUpload className="w-4 h-4 mr-2" />{bill.zoho_bill_id ? "Re-sync to Zoho" : "Sync to Zoho"}
                           </DropdownMenuItem>
+                          {canManage && (
+                            <DropdownMenuItem onClick={() => deleteBill(bill)} className="text-destructive focus:text-destructive">
+                              <Trash2 className="w-4 h-4 mr-2" /> Delete
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>

@@ -842,39 +842,51 @@ serve(async (req) => {
         if (!zohoVendorId) throw new Error(`Vendor "${(bill as any).vendor_name}" not found in Zoho. Please add them as a vendor contact in Zoho Books first.`);
 
         // Build line items from stored JSON, falling back to single line
+        // Fetch chart of accounts to resolve account_id from account names
+        const coaRes = await fetch(
+          `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}`,
+          { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
+        );
+        const coaData = await coaRes.json();
+        const allAccounts: any[] = coaData.chartofaccounts || [];
+
+        const resolveAccountId = (name: string): string | undefined => {
+          if (!name) return undefined;
+          const match = allAccounts.find((a: any) =>
+            a.account_name.toLowerCase() === name.toLowerCase() ||
+            a.account_name.toLowerCase().includes(name.toLowerCase()) ||
+            name.toLowerCase().includes(a.account_name.toLowerCase())
+          );
+          return match?.account_id;
+        };
+
         const storedLines: any[] = (bill as any).line_items || [];
         const zohoLineItems = storedLines.length > 0
           ? storedLines.map((l: any) => {
               const item: any = {
-                description: l.description || 'Line item',
+                description: l.item_details || l.description || 'Line item',
                 quantity: Number(l.quantity) || 1,
                 rate: Number(l.rate) || 0,
               };
-              // Map account to Zoho account name
-              if (l.account) {
-                const acctMap: Record<string, string> = {
-                  fuel: 'Fuel/Mileage Expenses', maintenance: 'Repairs and Maintenance',
-                  cogs: 'Cost of Goods Sold', insurance: 'Insurance',
-                  tolls: 'Travel Expenses', rent: 'Rent Expense',
-                  utilities: 'Electricity and Gas', equipment: 'Equipment Rental',
-                  administrative: 'Office Supplies', marketing: 'Advertising And Marketing',
-                  other: 'Miscellaneous Expenses',
-                };
-                item.account_name = acctMap[l.account] || 'Miscellaneous Expenses';
-              }
+              // Resolve account_id from the stored display name
+              const acctId = resolveAccountId(l.account);
+              if (acctId) item.account_id = acctId;
               // VAT: exclusive adds tax_percentage; inclusive = tax embedded; none = no tax
               if (l.vat_type === 'exclusive') {
                 item.tax_percentage = 7.5;
               }
               return item;
             })
-          : [{ description: (bill as any).notes || 'Vendor bill', quantity: 1, rate: Number((bill as any).amount) }];
+          : (() => {
+              const fallbackAcctId = resolveAccountId('Miscellaneous Expenses') || allAccounts[0]?.account_id;
+              return [{ description: (bill as any).notes || 'Vendor bill', quantity: 1, rate: Number((bill as any).amount), account_id: fallbackAcctId }];
+            })();
 
         const billPayload: any = {
           vendor_id: zohoVendorId,
           date: (bill as any).bill_date,
           due_date: (bill as any).due_date || undefined,
-          reference_number: (bill as any).bill_number || undefined,
+          bill_number: (bill as any).bill_number || undefined,
           notes: (bill as any).notes || undefined,
           line_items: zohoLineItems,
         };
