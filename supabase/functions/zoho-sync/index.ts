@@ -828,18 +828,48 @@ serve(async (req) => {
 
         if (billErr || !bill) throw new Error('Bill not found: ' + billId);
 
-        // Resolve vendor contact in Zoho
+        // Resolve vendor contact in Zoho (try exact match, then fuzzy search, then auto-create)
         let zohoVendorId: string | null = null;
-        if ((bill as any).vendor_name) {
-          const contactsRes = await fetch(
-            `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name=${encodeURIComponent((bill as any).vendor_name)}&contact_type=vendor`,
+        const vendorName = (bill as any).vendor_name || '';
+
+        if (vendorName) {
+          // 1. Try exact match by contact_name
+          const exactRes = await fetch(
+            `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name=${encodeURIComponent(vendorName)}&contact_type=vendor`,
             { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` } }
           );
-          const contactsData = await contactsRes.json();
-          zohoVendorId = contactsData.contacts?.[0]?.contact_id || null;
+          const exactData = await exactRes.json();
+          zohoVendorId = exactData.contacts?.[0]?.contact_id || null;
+
+          // 2. Fuzzy search if exact match fails
+          if (!zohoVendorId) {
+            const searchRes = await fetch(
+              `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&search_text=${encodeURIComponent(vendorName)}&contact_type=vendor`,
+              { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` } }
+            );
+            const searchData = await searchRes.json();
+            zohoVendorId = searchData.contacts?.[0]?.contact_id || null;
+          }
+
+          // 3. Auto-create vendor in Zoho if still not found
+          if (!zohoVendorId) {
+            console.log(`Vendor "${vendorName}" not found in Zoho — auto-creating...`);
+            const createRes = await fetch(
+              `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}`,
+              {
+                method: 'POST',
+                headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contact_name: vendorName, contact_type: 'vendor' }),
+              }
+            );
+            const createData = await createRes.json();
+            zohoVendorId = createData.contact?.contact_id || null;
+            if (!zohoVendorId) throw new Error(`Failed to create vendor "${vendorName}" in Zoho: ${createData.message || 'Unknown error'}`);
+            console.log(`Auto-created vendor "${vendorName}" in Zoho: ${zohoVendorId}`);
+          }
         }
 
-        if (!zohoVendorId) throw new Error(`Vendor "${(bill as any).vendor_name}" not found in Zoho. Please add them as a vendor contact in Zoho Books first.`);
+        if (!zohoVendorId) throw new Error('Vendor name is missing on this bill.');
 
         // Build line items from stored JSON, falling back to single line
         // Fetch chart of accounts to resolve account_id from account names
