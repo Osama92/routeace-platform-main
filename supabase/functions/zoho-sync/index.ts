@@ -841,14 +841,19 @@ serve(async (req) => {
           const exactData = await exactRes.json();
           zohoVendorId = exactData.contacts?.[0]?.contact_id || null;
 
-          // 2. Fuzzy search if exact match fails
+          // 2. Fuzzy search if exact match fails — verify returned name actually matches
           if (!zohoVendorId) {
             const searchRes = await fetch(
               `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&search_text=${encodeURIComponent(vendorName)}&contact_type=vendor`,
               { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` } }
             );
             const searchData = await searchRes.json();
-            zohoVendorId = searchData.contacts?.[0]?.contact_id || null;
+            const vendorNameLower = vendorName.toLowerCase();
+            const matched = (searchData.contacts || []).find((c: any) => {
+              const n = (c.contact_name || '').toLowerCase();
+              return n.includes(vendorNameLower) || vendorNameLower.includes(n);
+            });
+            zohoVendorId = matched?.contact_id || null;
           }
 
           // 3. Auto-create vendor in Zoho if still not found

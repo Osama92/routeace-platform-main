@@ -38,6 +38,7 @@ import {
   ArrowLeft,
   Upload,
   X,
+  CalendarDays,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -97,6 +98,14 @@ const PAYMENT_TERMS = [
   { value: "net_45",         label: "Net 45" },
   { value: "net_60",         label: "Net 60" },
 ];
+
+const MONTHS = [
+  { value: 1, label: "January" }, { value: 2, label: "February" }, { value: 3, label: "March" },
+  { value: 4, label: "April" }, { value: 5, label: "May" }, { value: 6, label: "June" },
+  { value: 7, label: "July" }, { value: 8, label: "August" }, { value: 9, label: "September" },
+  { value: 10, label: "October" }, { value: 11, label: "November" }, { value: 12, label: "December" },
+];
+const YEARS = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 
 const ACCOUNTS = [
   "Cost of Goods Sold",
@@ -164,6 +173,10 @@ const Bills = () => {
   const [uploading, setUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [fromMonth, setFromMonth] = useState<number | null>(new Date().getMonth() + 1);
+  const [fromYear, setFromYear] = useState<number | null>(new Date().getFullYear());
+  const [toMonth, setToMonth] = useState<number | null>(new Date().getMonth() + 1);
+  const [toYear, setToYear] = useState<number | null>(new Date().getFullYear());
   // view: "list" | "create" | "edit"
   const [view, setView] = useState<"list" | "create" | "edit">("list");
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
@@ -349,15 +362,25 @@ const Bills = () => {
     } finally { setFetchingZoho(false); }
   };
 
-  const filteredBills = bills.filter(b => {
+  const periodActive = fromMonth !== null && fromYear !== null && toMonth !== null && toYear !== null;
+  const periodBills = bills.filter(b => {
+    if (!periodActive) return true;
+    const d = new Date(b.bill_date);
+    const billVal = d.getFullYear() * 12 + (d.getMonth() + 1);
+    const fromVal = fromYear! * 12 + fromMonth!;
+    const toVal = toYear! * 12 + toMonth!;
+    return billVal >= fromVal && billVal <= toVal;
+  });
+
+  const filteredBills = periodBills.filter(b => {
     const q = searchQuery.toLowerCase();
     const matchesSearch = !q || (b.vendors?.company_name || b.vendor_name || "").toLowerCase().includes(q) || (b.bill_number || "").toLowerCase().includes(q);
     return matchesSearch && (statusFilter === "all" || b.status === statusFilter);
   });
 
-  const totalOpen = bills.filter(b => b.status === "open" || b.status === "partial").reduce((s, b) => s + (b.amount - b.paid_amount), 0);
-  const totalPaid = bills.filter(b => b.status === "paid").reduce((s, b) => s + b.amount, 0);
-  const overdue   = bills.filter(b => b.status === "open" && b.due_date && new Date(b.due_date) < new Date()).length;
+  const totalOpen = periodBills.filter(b => b.status === "open" || b.status === "partial").reduce((s, b) => s + (b.amount - b.paid_amount), 0);
+  const totalPaid = periodBills.filter(b => b.status === "paid").reduce((s, b) => s + b.amount, 0);
+  const overdue   = periodBills.filter(b => b.status === "open" && b.due_date && new Date(b.due_date) < new Date()).length;
 
   // ─────────────────────────────────────────────────────────────────
   // CREATE / EDIT FORM VIEW
@@ -637,9 +660,9 @@ const Bills = () => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6">
         {[
           { label: "Outstanding",    value: formatCurrency(totalOpen), color: "text-warning" },
-          { label: "Paid (All Time)", value: formatCurrency(totalPaid), color: "text-success" },
+          { label: periodActive ? "Paid (Period)" : "Paid (All Time)", value: formatCurrency(totalPaid), color: "text-success" },
           { label: "Overdue",        value: String(overdue), color: overdue > 0 ? "text-destructive" : "text-foreground" },
-          { label: "Total Bills",    value: String(bills.length), color: "text-foreground" },
+          { label: "Total Bills",    value: String(periodBills.length), color: "text-foreground" },
         ].map((s, i) => (
           <motion.div key={s.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }} className="glass-card p-4">
             <p className="text-xs text-muted-foreground mb-1">{s.label}</p>
@@ -651,6 +674,50 @@ const Bills = () => {
       {/* Toolbar */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="glass-card p-4 mb-4">
         <div className="flex flex-wrap items-center gap-3">
+          {/* Period range filter */}
+          <div className="flex items-center gap-1.5 bg-secondary/50 border border-border rounded-md px-2 h-10">
+            <CalendarDays className="w-4 h-4 text-muted-foreground shrink-0" />
+            {/* From */}
+            <Select value={fromMonth?.toString() ?? ""} onValueChange={v => setFromMonth(v ? Number(v) : null)}>
+              <SelectTrigger className="border-0 shadow-none bg-transparent h-8 text-sm w-[100px] px-1 focus:ring-0">
+                <SelectValue placeholder="From" />
+              </SelectTrigger>
+              <SelectContent side="bottom" avoidCollisions={false}>
+                {MONTHS.map(m => <SelectItem key={m.value} value={m.value.toString()}>{m.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={fromYear?.toString() ?? ""} onValueChange={v => setFromYear(v ? Number(v) : null)}>
+              <SelectTrigger className="border-0 shadow-none bg-transparent h-8 text-sm w-[72px] px-1 focus:ring-0">
+                <SelectValue placeholder="Year" />
+              </SelectTrigger>
+              <SelectContent side="bottom" avoidCollisions={false}>
+                {YEARS.map(y => <SelectItem key={y} value={y.toString()}>{y}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <span className="text-muted-foreground text-xs px-1">→</span>
+            {/* To */}
+            <Select value={toMonth?.toString() ?? ""} onValueChange={v => setToMonth(v ? Number(v) : null)}>
+              <SelectTrigger className="border-0 shadow-none bg-transparent h-8 text-sm w-[100px] px-1 focus:ring-0">
+                <SelectValue placeholder="To" />
+              </SelectTrigger>
+              <SelectContent side="bottom" avoidCollisions={false}>
+                {MONTHS.map(m => <SelectItem key={m.value} value={m.value.toString()}>{m.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={toYear?.toString() ?? ""} onValueChange={v => setToYear(v ? Number(v) : null)}>
+              <SelectTrigger className="border-0 shadow-none bg-transparent h-8 text-sm w-[72px] px-1 focus:ring-0">
+                <SelectValue placeholder="Year" />
+              </SelectTrigger>
+              <SelectContent side="bottom" avoidCollisions={false}>
+                {YEARS.map(y => <SelectItem key={y} value={y.toString()}>{y}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {periodActive && (
+              <button onClick={() => { setFromMonth(null); setFromYear(null); setToMonth(null); setToYear(null); }} className="text-muted-foreground hover:text-foreground ml-1">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
           <div className="relative flex-1 min-w-[180px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input placeholder="Search vendor or bill #..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 bg-secondary/50" />
