@@ -754,6 +754,71 @@ serve(async (req) => {
         break;
       }
 
+      case 'fetch_invoices': {
+        // Pull invoices from Zoho Books and upsert into local invoices table
+        let page = 1;
+        let hasMore = true;
+        let upserted = 0;
+
+        while (hasMore) {
+          const res = await fetch(
+            `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}&page=${page}&per_page=200`,
+            { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
+          );
+          const data = await res.json();
+          const zohoInvoices: any[] = data.invoices || [];
+          hasMore = data.page_context?.has_more_page === true;
+          page++;
+
+          for (const zi of zohoInvoices) {
+            // Try to match customer by name to a local customer
+            let customerId: string | null = null;
+            if (zi.customer_name) {
+              const { data: customer } = await supabase
+                .from('customers')
+                .select('id')
+                .ilike('company_name', zi.customer_name)
+                .maybeSingle();
+              customerId = customer?.id || null;
+            }
+
+            const invoicePayload: any = {
+              invoice_number: zi.invoice_number || null,
+              customer_id: customerId,
+              amount: Number(zi.sub_total || 0),
+              tax_amount: Number(zi.tax_total || 0),
+              total_amount: Number(zi.total || 0),
+              invoice_date: zi.date || new Date().toISOString().split('T')[0],
+              due_date: zi.due_date || null,
+              status: zi.status === 'paid' ? 'paid' : zi.status === 'void' ? 'void' : zi.status === 'draft' ? 'draft' : 'pending',
+              notes: zi.notes || null,
+              zoho_invoice_id: zi.invoice_id,
+              zoho_synced_at: new Date().toISOString(),
+            };
+
+            // Upsert by zoho_invoice_id
+            const { data: existing } = await supabase
+              .from('invoices')
+              .select('id')
+              .eq('zoho_invoice_id', zi.invoice_id)
+              .maybeSingle();
+
+            if (existing) {
+              await supabase.from('invoices').update(invoicePayload).eq('id', existing.id);
+            } else {
+              await supabase.from('invoices').insert(invoicePayload);
+            }
+            upserted++;
+          }
+
+          if (zohoInvoices.length < 200) hasMore = false;
+        }
+
+        result.success = true;
+        result.upserted = upserted;
+        break;
+      }
+
       case 'fetch_bills': {
         // Pull vendor bills from Zoho Books and upsert into local bills table
         let page = 1;

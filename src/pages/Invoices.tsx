@@ -224,6 +224,7 @@ const InvoicesPage = () => {
   const [saving, setSaving] = useState(false);
   const [pdfDownloading, setPdfDownloading] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [fetchingZoho, setFetchingZoho] = useState(false);
   const [syncingCustomers, setSyncingCustomers] = useState(false);
   const { toast } = useToast();
   const { user, hasAnyRole, userRole } = useAuth();
@@ -900,6 +901,26 @@ const InvoicesPage = () => {
     }
   };
 
+  const fetchFromZoho = async () => {
+    setFetchingZoho(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('zoho-sync', {
+        body: { action: 'fetch_invoices' },
+      });
+      if (error) throw error;
+      if (data?.success === false) throw new Error(data.error);
+      // Clear period filter so imported invoices from other months are visible
+      setSelectedMonth(null);
+      setSelectedYear(null);
+      toast({ title: "Invoices pulled from Zoho", description: `${data?.upserted ?? 0} invoice(s) imported.` });
+      fetchInvoices();
+    } catch (err: any) {
+      toast({ title: "Zoho fetch failed", description: err.message, variant: "destructive" });
+    } finally {
+      setFetchingZoho(false);
+    }
+  };
+
   const handleDownloadPDF = async (invoice: Invoice) => {
     if (pdfDownloading) return;
 
@@ -1316,8 +1337,8 @@ const InvoicesPage = () => {
 
   const filteredInvoices = periodInvoices.filter((invoice) => {
     const matchesSearch =
-      invoice.invoice_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      invoice.customers?.company_name?.toLowerCase().includes(searchQuery.toLowerCase());
+      (invoice.invoice_number || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (invoice.customers?.company_name || "").toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus =
       statusFilter === "all" || invoice.status === statusFilter;
     return matchesSearch && matchesStatus;
@@ -1440,6 +1461,12 @@ const InvoicesPage = () => {
         </div>
 
         <div className="flex gap-2">
+          {canManage && (
+            <Button variant="outline" onClick={fetchFromZoho} disabled={fetchingZoho}>
+              {fetchingZoho ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <CloudDownload className="w-4 h-4 mr-2" />}
+              Pull from Zoho
+            </Button>
+          )}
           {canManage && (
             <Button
               variant="outline"
