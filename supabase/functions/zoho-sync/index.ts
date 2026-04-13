@@ -122,9 +122,11 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
     return parsedItems.flatMap(item => {
       // Zoho line item: name = item/product name, description = free-text detail shown below item name
       // We put tonnage in the name so it appears in the item column, and location in description
-      const tonnagePart = item.tonnage ? ` [${item.tonnage}T]` : '';
-      const itemName = `${item.description}${tonnagePart}`;
-      const itemDescription = item.location || undefined;
+      const tonnagePart = item.tonnage ? ` [${item.tonnage}]` : '';
+      const rawName = `${item.description}${tonnagePart}`;
+      const itemName = rawName.length > 200 ? rawName.substring(0, 197) + '...' : rawName;
+      const rawDesc = item.location || '';
+      const itemDescription = rawDesc.length > 200 ? rawDesc.substring(0, 197) + '...' : (rawDesc || undefined);
 
       // For inclusive VAT, extract the net rate (rate ÷ 1.075) so that when Zoho applies
       // its exclusive 7.5% on top it arrives at the same gross total as the platform.
@@ -153,7 +155,7 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
           : item.serviceCharge;
 
         const scLine: any = {
-          name: `${item.description} - Service Charge${tonnagePart}`,
+          name: (`${item.description} - Service Charge${tonnagePart}`).substring(0, 200),
           description: itemDescription,
           quantity: 1,
           rate: scRate,
