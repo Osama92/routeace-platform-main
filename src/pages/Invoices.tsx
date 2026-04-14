@@ -522,7 +522,7 @@ const InvoicesPage = () => {
     try {
       // Encode each line item including per-item tonnage, vatType, serviceCharge
       const lineItemsNote = lineItems.map(item => {
-        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price.toLocaleString()}`;
+        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price}`;
         if (item.tonnage) s += `|t:${item.tonnage}`;
         if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
         if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
@@ -640,7 +640,8 @@ const InvoicesPage = () => {
     const items = itemsSection.split('; ').map((raw) => {
       // Each item may have trailing pipe-separated metadata: |t:tonnage|v:vatType|sc:serviceCharge
       const [itemPart, ...metaParts] = raw.split('|');
-      const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
+      // Support both ₦1234 and ₦1,234 and plain 1234 formats
+      const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*[^\d]*([\d,]+(?:\.\d+)?)/);
       if (!match) return null;
       const meta: Record<string, string> = {};
       metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v) meta[k.trim()] = v.trim(); });
@@ -702,7 +703,7 @@ const InvoicesPage = () => {
     setSaving(true);
     try {
       const lineItemsNote = lineItems.map(item => {
-        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price.toLocaleString()}`;
+        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price}`;
         if (item.tonnage) s += `|t:${item.tonnage}`;
         if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
         if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
@@ -955,7 +956,7 @@ const InvoicesPage = () => {
         const itemsSection = notes.split('\n\nNotes:')[0];
         const items = itemsSection.split('; ').map((raw, index) => {
           const [itemPart, ...metaParts] = raw.split('|');
-          const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
+          const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*[^\d]*([\d,]+(?:\.\d+)?)/);
           if (!match) return null;
           const meta: Record<string, string> = {};
           metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v) meta[k.trim()] = v.trim(); });
