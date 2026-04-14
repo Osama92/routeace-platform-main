@@ -112,6 +112,7 @@ const ALL_MENUS = [
   { name: "Partner Performance", href: "/vendor-performance", roles: ["admin", "operations"] },
   { name: "Invoices", href: "/invoices", roles: ["admin", "support", "operations"] },
   { name: "Expenses", href: "/expenses", roles: ["admin", "operations"] },
+  { name: "Bills", href: "/bills", roles: ["admin", "operations"] },
   { name: "Analytics", href: "/analytics", roles: ["admin", "operations"] },
   // Communications
   { name: "Email Notifications", href: "/emails", roles: ["admin", "support", "operations"] },
