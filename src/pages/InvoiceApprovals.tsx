@@ -34,6 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Search,
   CheckCircle,
@@ -159,6 +160,8 @@ const InvoiceApprovalsPage = () => {
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const { toast } = useToast();
   const { user } = useAuth();
@@ -235,6 +238,44 @@ const InvoiceApprovalsPage = () => {
       console.error("Failed to send approval notification:", error);
       // Don't throw - email is secondary to the approval action
     }
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkProcessing(true);
+    let succeeded = 0;
+    let failed = 0;
+    for (const id of selectedIds) {
+      const invoice = filteredInvoices.find(inv => inv.id === id);
+      if (!invoice) continue;
+      try {
+        if (invoice.approval_status === "pending_first_approval") {
+          await supabase.from("invoices").update({
+            approval_status: "pending_second_approval",
+            first_approver_id: user?.id,
+            first_approved_at: new Date().toISOString(),
+          }).eq("id", id);
+        } else if (invoice.approval_status === "pending_second_approval") {
+          await supabase.from("invoices").update({
+            approval_status: "approved",
+            second_approver_id: user?.id,
+            second_approved_at: new Date().toISOString(),
+            status: "pending",
+          }).eq("id", id);
+        }
+        succeeded++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkProcessing(false);
+    setSelectedIds(new Set());
+    toast({
+      title: `Bulk Approval Complete`,
+      description: `${succeeded} approved${failed > 0 ? `, ${failed} failed` : ""}`,
+      variant: failed > 0 ? "destructive" : "default",
+    });
+    fetchInvoices();
   };
 
   const handleFirstApproval = async (invoice: Invoice) => {
@@ -500,9 +541,31 @@ const InvoiceApprovalsPage = () => {
         </div>
       ) : (
         <div className="glass-card overflow-hidden">
+          {/* Bulk action bar */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center justify-between px-4 py-2.5 bg-primary/10 border-b border-border">
+              <span className="text-sm font-medium">{selectedIds.size} selected</span>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleBulkApprove} disabled={bulkProcessing}>
+                  {bulkProcessing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <CheckCheck className="w-4 h-4 mr-2" />}
+                  Approve Selected
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+              </div>
+            </div>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={filteredInvoices.length > 0 && filteredInvoices.every(inv => selectedIds.has(inv.id))}
+                    onCheckedChange={(checked) => {
+                      if (checked) setSelectedIds(new Set(filteredInvoices.map(inv => inv.id)));
+                      else setSelectedIds(new Set());
+                    }}
+                  />
+                </TableHead>
                 <TableHead>Invoice #</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Amount</TableHead>
@@ -517,7 +580,20 @@ const InvoiceApprovalsPage = () => {
                 const StatusIcon = statusInfo.icon;
 
                 return (
-                  <TableRow key={invoice.id}>
+                  <TableRow key={invoice.id} className={selectedIds.has(invoice.id) ? "bg-primary/5" : ""}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.has(invoice.id)}
+                        onCheckedChange={(checked) => {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (checked) next.add(invoice.id);
+                            else next.delete(invoice.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableCell>
                     <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
                     <TableCell>{invoice.customers?.company_name || "—"}</TableCell>
                     <TableCell className="font-semibold">{formatCurrency(invoice.total_amount)}</TableCell>

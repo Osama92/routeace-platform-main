@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Search,
   CheckCircle,
@@ -134,6 +135,8 @@ const ExpenseApprovalsPage = () => {
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>("pending");
   const [userApprovalRoles, setUserApprovalRoles] = useState<ApprovalRole[]>([]);
   const { toast } = useToast();
@@ -229,6 +232,43 @@ const ExpenseApprovalsPage = () => {
     } catch (error) {
       console.error("Failed to send approval notification:", error);
     }
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedIds.size === 0) return;
+    setBulkProcessing(true);
+    let succeeded = 0;
+    let failed = 0;
+    for (const id of selectedIds) {
+      const expense = filteredExpenses.find(e => e.id === id);
+      if (!expense) continue;
+      try {
+        if (expense.approval_status === "pending_first_approval" && canFirstApprove) {
+          await supabase.from("expenses").update({
+            approval_status: "pending_second_approval",
+            first_approver_id: user?.id,
+            first_approved_at: new Date().toISOString(),
+          }).eq("id", id);
+        } else if (expense.approval_status === "pending_second_approval" && canSecondApprove) {
+          await supabase.from("expenses").update({
+            approval_status: "approved",
+            second_approver_id: user?.id,
+            second_approved_at: new Date().toISOString(),
+          }).eq("id", id);
+        }
+        succeeded++;
+      } catch {
+        failed++;
+      }
+    }
+    setBulkProcessing(false);
+    setSelectedIds(new Set());
+    toast({
+      title: `Bulk Approval Complete`,
+      description: `${succeeded} approved${failed > 0 ? `, ${failed} failed` : ""}`,
+      variant: failed > 0 ? "destructive" : "default",
+    });
+    fetchExpenses();
   };
 
   const handleFirstApproval = async (expense: Expense) => {
@@ -463,9 +503,31 @@ const ExpenseApprovalsPage = () => {
         </div>
       ) : (
         <div className="glass-card overflow-hidden">
+          {/* Bulk action bar */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center justify-between px-4 py-2.5 bg-primary/10 border-b border-border">
+              <span className="text-sm font-medium">{selectedIds.size} selected</span>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleBulkApprove} disabled={bulkProcessing}>
+                  {bulkProcessing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <CheckCheck className="w-4 h-4 mr-2" />}
+                  Approve Selected
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+              </div>
+            </div>
+          )}
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={filteredExpenses.length > 0 && filteredExpenses.every(e => selectedIds.has(e.id))}
+                    onCheckedChange={(checked) => {
+                      if (checked) setSelectedIds(new Set(filteredExpenses.map(e => e.id)));
+                      else setSelectedIds(new Set());
+                    }}
+                  />
+                </TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Category</TableHead>
                 <TableHead>Description</TableHead>
@@ -481,20 +543,27 @@ const ExpenseApprovalsPage = () => {
                 const StatusIcon = statusInfo.icon;
 
                 return (
-                  <TableRow key={expense.id}>
+                  <TableRow key={expense.id} className={selectedIds.has(expense.id) ? "bg-primary/5" : ""}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.has(expense.id)}
+                        onCheckedChange={(checked) => {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (checked) next.add(expense.id);
+                            else next.delete(expense.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableCell>
                     <TableCell className="font-medium">
                       {format(new Date(expense.expense_date), "dd MMM yyyy")}
                     </TableCell>
                     <TableCell className="capitalize">{formatCategory(expense.category)}</TableCell>
                     <TableCell>{expense.description}</TableCell>
                     <TableCell>
-                      <span
-                        className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          expense.is_cogs
-                            ? "bg-destructive/15 text-destructive"
-                            : "bg-info/15 text-info"
-                        }`}
-                      >
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${expense.is_cogs ? "bg-destructive/15 text-destructive" : "bg-info/15 text-info"}`}>
                         {expense.is_cogs ? "COGS" : "OPEX"}
                       </span>
                     </TableCell>
