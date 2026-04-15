@@ -73,10 +73,9 @@ const supportNavigation = [
 const Sidebar = () => {
   const { isOpen, setIsOpen, isCollapsed, setIsCollapsed } = useSidebar();
   const location = useLocation();
-  const { userRole, signOut, user } = useAuth();
+  const { userRole, signOut, user, grantedRoutes } = useAuth();
   const [isMobile, setIsMobile] = useState(false);
   const [hiddenMenus, setHiddenMenus] = useState<Set<string>>(new Set());
-  const [grantedMenus, setGrantedMenus] = useState<Set<string>>(new Set());
   const fetchedUserId = useRef<string | null>(null);
 
   // Check screen size
@@ -96,7 +95,7 @@ const Sidebar = () => {
     }
   }, [location.pathname, isMobile, setIsOpen]);
 
-  // Fetch per-user menu overrides (hidden = removed access, hidden:false = granted extra access)
+  // Fetch hidden menu overrides (hidden=true means admin removed access for this user)
   useEffect(() => {
     if (!user?.id || fetchedUserId.current === user.id) return;
     fetchedUserId.current = user.id;
@@ -104,15 +103,11 @@ const Sidebar = () => {
       const { data } = await (supabase as any)
         .from("user_menu_overrides")
         .select("menu_href, hidden")
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .eq("hidden", true);
       const hidden = new Set<string>();
-      const granted = new Set<string>();
-      (data || []).forEach((r: any) => {
-        if (r.hidden) hidden.add(r.menu_href);
-        else granted.add(r.menu_href);
-      });
+      (data || []).forEach((r: any) => { hidden.add(r.menu_href); });
       setHiddenMenus(hidden);
-      setGrantedMenus(granted);
     })();
   }, [user?.id]);
 
@@ -131,7 +126,7 @@ const Sidebar = () => {
     ...navigation.filter((item) => {
       if (!userRole) return false;
       if (item.roles.includes(userRole)) return false; // already included above
-      return grantedMenus.has(item.href);
+      return grantedRoutes.has(item.href);
     }),
   ];
 
@@ -186,7 +181,7 @@ const Sidebar = () => {
 
         {/* Support/Operations Section */}
         {(userRole === "admin" || userRole === "support" || userRole === "operations" ||
-          supportNavigation.some(item => grantedMenus.has(item.href))) && (
+          supportNavigation.some(item => grantedRoutes.has(item.href))) && (
           <>
             {(!isCollapsed || isMobile) && (
               <div className="pt-4 pb-2">
@@ -196,7 +191,7 @@ const Sidebar = () => {
               </div>
             )}
             {supportNavigation
-              .filter(item => (item.roles.includes(userRole || "") || grantedMenus.has(item.href)) && !hiddenMenus.has(item.href))
+              .filter(item => (item.roles.includes(userRole || "") || grantedRoutes.has(item.href)) && !hiddenMenus.has(item.href))
               .map((item) => {
                 const isActive = location.pathname === item.href;
                 return (
@@ -218,7 +213,7 @@ const Sidebar = () => {
         )}
 
         {/* Admin Section */}
-        {(userRole === "admin" || adminNavigation.some(item => grantedMenus.has(item.href))) && (
+        {(userRole === "admin" || adminNavigation.some(item => grantedRoutes.has(item.href))) && (
           <>
             {(!isCollapsed || isMobile) && (
               <div className="pt-4 pb-2">
@@ -227,7 +222,7 @@ const Sidebar = () => {
                 </p>
               </div>
             )}
-            {adminNavigation.filter(item => (userRole === "admin" || grantedMenus.has(item.href)) && !hiddenMenus.has(item.href)).map((item) => {
+            {adminNavigation.filter(item => (userRole === "admin" || grantedRoutes.has(item.href)) && !hiddenMenus.has(item.href)).map((item) => {
               const isActive = location.pathname === item.href;
               return (
                 <Link
