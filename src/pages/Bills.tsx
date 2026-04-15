@@ -183,10 +183,10 @@ const Bills = () => {
   const [formData, setFormData] = useState(emptyForm());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const { user, hasAnyRole } = useAuth();
+  const { user, hasAnyRole, grantedRoutes } = useAuth();
   const { logChange } = useAuditLog();
 
-  const canManage = hasAnyRole(["admin", "operations"]);
+  const canManage = hasAnyRole(["admin", "operations"]) || grantedRoutes.has("/bills");
 
   useEffect(() => { fetchData(); }, []);
 
