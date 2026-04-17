@@ -3,6 +3,15 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import {
@@ -20,6 +29,12 @@ import {
   Cell,
 } from "recharts";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   TrendingUp,
   TrendingDown,
   Truck,
@@ -29,13 +44,16 @@ import {
   Download,
   CalendarRange,
   ChevronDown,
-  ChevronUp,
   User,
   Building2,
   Tag,
   Pencil,
   Check,
   X,
+  FileText,
+  Sheet,
+  Mail,
+  Send,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -81,8 +99,13 @@ const AnalyticsPage = () => {
     count: number;
     dispatches: { id: string; dispatch_number: string; truck: string; customer: string; driver: string; vendor: string | null }[];
   }[]>([]);
-  const [expandedDelayReason, setExpandedDelayReason] = useState<string | null>(null);
+  const [delayModalReason, setDelayModalReason] = useState<string | null>(null);
   const [editingVendor, setEditingVendor] = useState<{ dispatchId: string; value: string } | null>(null);
+  const [emailContacts, setEmailContacts] = useState<{ id: string; label: string; email: string; type: "customer" | "vendor" }[]>([]);
+  const [selectedEmailContact, setSelectedEmailContact] = useState<string>("");
+  const [emailBody, setEmailBody] = useState<string>("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [showEmailSection, setShowEmailSection] = useState(false);
   const [idleFleet, setIdleFleet] = useState<{ id: string; registration: string; truck_type: string | null; status: string; idleReason: string }[]>([]);
   const [totalFleetCount, setTotalFleetCount] = useState(0);
   const [editingIdleReason, setEditingIdleReason] = useState<{ vehicleId: string; value: string } | null>(null);
@@ -93,6 +116,24 @@ const AnalyticsPage = () => {
   useEffect(() => {
     fetchAnalyticsData();
   }, [dateRange.from, dateRange.to]);
+
+  useEffect(() => {
+    (async () => {
+      const [custRes, partnerRes] = await Promise.all([
+        supabase.from("customers").select("id, company_name, email").order("company_name"),
+        supabase.from("partners").select("id, company_name, contact_email").order("company_name"),
+      ]);
+      const contacts: typeof emailContacts = [
+        ...((custRes.data || []) as any[])
+          .filter((c: any) => c.email)
+          .map((c: any) => ({ id: c.id, label: c.company_name, email: c.email, type: "customer" as const })),
+        ...((partnerRes.data || []) as any[])
+          .filter((p: any) => p.contact_email)
+          .map((p: any) => ({ id: p.id, label: p.company_name, email: p.contact_email, type: "vendor" as const })),
+      ];
+      setEmailContacts(contacts);
+    })();
+  }, []);
 
   const fetchAnalyticsData = async () => {
     if (!dateRange.from || !dateRange.to) return;
@@ -458,6 +499,88 @@ const AnalyticsPage = () => {
       dispatches: r.dispatches.map(d => d.id === dispatchId ? { ...d, vendor: note || null } : d),
     })));
     setEditingVendor(null);
+  };
+
+  const exportDelayModalCSV = (reason: string, dispatches: typeof delayReasons[0]["dispatches"]) => {
+    const header = ["Dispatch #", "Truck", "Customer", "Driver", "Vendor Note"];
+    const rows = dispatches.map(d => [d.dispatch_number, d.truck, d.customer, d.driver, d.vendor || ""]);
+    const csv = [header, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `delay-${reason.replace(/\s+/g, "-").toLowerCase()}-${format(new Date(), "yyyy-MM-dd")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const buildDefaultEmailBody = (
+    reason: string,
+    dispatches: typeof delayReasons[0]["dispatches"],
+    contact: typeof emailContacts[0] | null
+  ) => {
+    const period = `${dateRange.from ? format(dateRange.from, "dd MMM yyyy") : ""} – ${dateRange.to ? format(dateRange.to, "dd MMM yyyy") : ""}`;
+    const greeting = contact ? `Dear ${contact.label},` : "Dear Partner,";
+    const rows = dispatches.map(d => `  • ${d.dispatch_number} | Truck: ${d.truck} | Driver: ${d.driver}${d.vendor ? ` | Note: ${d.vendor}` : ""}`).join("\n");
+    return `${greeting}\n\nPlease find below a summary of delivery delays attributed to "${reason}" for the period ${period}:\n\n${rows}\n\nTotal affected trips: ${dispatches.length}\n\nKindly review and advise on corrective measures.\n\nBest regards,\nRouteAce Logistics`;
+  };
+
+  // Returns only the dispatches relevant to the selected contact
+  const getFilteredDispatchesForContact = (
+    allDispatches: typeof delayReasons[0]["dispatches"],
+    contact: typeof emailContacts[0] | null
+  ) => {
+    if (!contact) return allDispatches;
+    if (contact.type === "customer") {
+      // Filter to trips belonging to this customer
+      const name = contact.label.toLowerCase();
+      const filtered = allDispatches.filter(d => d.customer.toLowerCase().includes(name) || name.includes(d.customer.toLowerCase()));
+      return filtered.length > 0 ? filtered : allDispatches; // fallback to all if no match
+    }
+    // For vendors: include all trips (vendor is responsible for the whole reason category)
+    return allDispatches;
+  };
+
+  const sendDelayEmail = async (reason: string, dispatches: typeof delayReasons[0]["dispatches"]) => {
+    const contact = emailContacts.find(c => c.id === selectedEmailContact);
+    if (!contact) { toast({ title: "Select a recipient first", variant: "destructive" }); return; }
+    setSendingEmail(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("send-notification-email", {
+        body: {
+          recipient_email: contact.email,
+          recipient_type: contact.type,
+          subject: `Delivery Delay Report — ${reason}`,
+          body: emailBody,
+          notification_type: "delay_report",
+        },
+      });
+      if (error || !data?.success) throw new Error(error?.message || data?.error || "Send failed");
+      toast({ title: "Email sent", description: `Delay report sent to ${contact.label} (${contact.email})` });
+      setShowEmailSection(false);
+      setSelectedEmailContact("");
+      setEmailBody("");
+    } catch (err: any) {
+      toast({ title: "Failed to send", description: err.message, variant: "destructive" });
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+  const exportDelayModalPDF = (reason: string, dispatches: typeof delayReasons[0]["dispatches"]) => {
+    const doc = new jsPDF({ orientation: "landscape" });
+    doc.setFontSize(14);
+    doc.text(`Delivery Delay Report — ${reason}`, 14, 16);
+    doc.setFontSize(9);
+    doc.text(`Period: ${dateRange.from ? format(dateRange.from, "dd MMM yyyy") : ""} – ${dateRange.to ? format(dateRange.to, "dd MMM yyyy") : ""}`, 14, 23);
+    autoTable(doc, {
+      startY: 28,
+      head: [["Dispatch #", "Truck", "Customer", "Driver", "Vendor Note"]],
+      body: dispatches.map(d => [d.dispatch_number, d.truck, d.customer, d.driver, d.vendor || ""]),
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [234, 88, 12] },
+    });
+    doc.save(`delay-${reason.replace(/\s+/g, "-").toLowerCase()}-${format(new Date(), "yyyy-MM-dd")}.pdf`);
   };
 
   const saveIdleReason = async (vehicleId: string, reason: string) => {
@@ -865,17 +988,16 @@ const AnalyticsPage = () => {
                 const total = delayReasons.reduce((s, r) => s + r.count, 0);
                 return delayReasons.map((item, index) => {
                   const pct = Math.round((item.count / total) * 100);
-                  const isExpanded = expandedDelayReason === item.reason;
                   return (
                     <div key={index} className="space-y-1">
                       <button
-                        className="w-full text-left"
-                        onClick={() => setExpandedDelayReason(isExpanded ? null : item.reason)}
+                        className="w-full text-left group"
+                        onClick={() => setDelayModalReason(item.reason)}
                       >
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-foreground flex items-center gap-1">
+                          <span className="text-foreground flex items-center gap-1 group-hover:text-primary transition-colors">
                             {item.reason}
-                            {isExpanded ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+                            <ChevronDown className="w-3 h-3 text-muted-foreground group-hover:text-primary" />
                           </span>
                           <span className="font-semibold text-warning">
                             {pct}% <span className="text-xs text-muted-foreground font-normal">({item.count} trip{item.count > 1 ? "s" : ""})</span>
@@ -888,57 +1010,6 @@ const AnalyticsPage = () => {
                           />
                         </div>
                       </button>
-                      {isExpanded && (
-                        <div className="mt-2 rounded-lg border border-border/50 overflow-hidden">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="bg-secondary/60 text-muted-foreground">
-                                <th className="text-left px-3 py-2 font-medium">Dispatch</th>
-                                <th className="text-left px-3 py-2 font-medium"><Truck className="inline w-3 h-3 mr-1" />Truck</th>
-                                <th className="text-left px-3 py-2 font-medium"><Building2 className="inline w-3 h-3 mr-1" />Customer</th>
-                                <th className="text-left px-3 py-2 font-medium"><User className="inline w-3 h-3 mr-1" />Driver</th>
-                                <th className="text-left px-3 py-2 font-medium"><Tag className="inline w-3 h-3 mr-1" />Vendor Note</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {item.dispatches.map((d) => (
-                                <tr key={d.id} className="border-t border-border/30 hover:bg-secondary/30">
-                                  <td className="px-3 py-2 text-foreground font-mono">{d.dispatch_number}</td>
-                                  <td className="px-3 py-2 text-foreground">{d.truck}</td>
-                                  <td className="px-3 py-2 text-foreground">{d.customer}</td>
-                                  <td className="px-3 py-2 text-foreground">{d.driver}</td>
-                                  <td className="px-3 py-2">
-                                    {editingVendor?.dispatchId === d.id ? (
-                                      <div className="flex items-center gap-1">
-                                        <input
-                                          className="flex-1 bg-background border border-border rounded px-2 py-0.5 text-xs text-foreground min-w-0"
-                                          value={editingVendor.value}
-                                          autoFocus
-                                          onChange={e => setEditingVendor({ dispatchId: d.id, value: e.target.value })}
-                                          onKeyDown={e => {
-                                            if (e.key === "Enter") saveVendorNote(d.id, editingVendor.value);
-                                            if (e.key === "Escape") setEditingVendor(null);
-                                          }}
-                                        />
-                                        <button onClick={() => saveVendorNote(d.id, editingVendor.value)} className="text-success hover:opacity-80"><Check className="w-3 h-3" /></button>
-                                        <button onClick={() => setEditingVendor(null)} className="text-destructive hover:opacity-80"><X className="w-3 h-3" /></button>
-                                      </div>
-                                    ) : (
-                                      <button
-                                        className="flex items-center gap-1 text-muted-foreground hover:text-foreground group"
-                                        onClick={() => setEditingVendor({ dispatchId: d.id, value: d.vendor || "" })}
-                                      >
-                                        <span>{d.vendor || <span className="italic opacity-50">Add vendor</span>}</span>
-                                        <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                      </button>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
                     </div>
                   );
                 });
@@ -1216,6 +1287,228 @@ const AnalyticsPage = () => {
           </div>
         )}
       </motion.div>
+
+      {/* Delay Reason Detail Modal */}
+      {(() => {
+        const modalItem = delayModalReason ? delayReasons.find(r => r.reason === delayModalReason) : null;
+        if (!modalItem) return null;
+        const total = delayReasons.reduce((s, r) => s + r.count, 0);
+        const pct = Math.round((modalItem.count / total) * 100);
+        const activeContact = emailContacts.find(c => c.id === selectedEmailContact) || null;
+        const exportDispatches = getFilteredDispatchesForContact(modalItem.dispatches, activeContact);
+        return (
+          <Dialog open={!!delayModalReason} onOpenChange={open => { if (!open) { setDelayModalReason(null); setEditingVendor(null); setShowEmailSection(false); setSelectedEmailContact(""); setEmailBody(""); } }}>
+            <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+              <DialogHeader>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <DialogTitle className="font-heading text-lg">{modalItem.reason}</DialogTitle>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                      {activeContact
+                        ? <><span className="text-primary font-medium">{activeContact.label}</span> · {exportDispatches.length} trip{exportDispatches.length !== 1 ? "s" : ""}</>
+                        : <>{modalItem.count} trip{modalItem.count !== 1 ? "s" : ""} · {pct}% of all delays</>
+                      }{" "}· {dateRange.from ? format(dateRange.from, "dd MMM yyyy") : ""} – {dateRange.to ? format(dateRange.to, "dd MMM yyyy") : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportDelayModalCSV(modalItem.reason, exportDispatches)}
+                    >
+                      <Sheet className="w-4 h-4 mr-1.5" />
+                      Export CSV
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportDelayModalPDF(modalItem.reason, exportDispatches)}
+                    >
+                      <FileText className="w-4 h-4 mr-1.5" />
+                      Export PDF
+                    </Button>
+                  </div>
+                </div>
+              </DialogHeader>
+
+              <div className="flex-1 overflow-y-auto mt-2">
+                <div className="rounded-lg border border-border/50 overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-secondary/60 text-muted-foreground">
+                        <th className="text-left px-4 py-2.5 font-medium">Dispatch #</th>
+                        <th className="text-left px-4 py-2.5 font-medium">
+                          <Truck className="inline w-3.5 h-3.5 mr-1" />Truck
+                        </th>
+                        <th className="text-left px-4 py-2.5 font-medium">
+                          <Building2 className="inline w-3.5 h-3.5 mr-1" />Customer
+                        </th>
+                        <th className="text-left px-4 py-2.5 font-medium">
+                          <User className="inline w-3.5 h-3.5 mr-1" />Driver
+                        </th>
+                        <th className="text-left px-4 py-2.5 font-medium">
+                          <Tag className="inline w-3.5 h-3.5 mr-1" />Vendor Note
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {exportDispatches.map((d) => (
+                        <tr key={d.id} className="border-t border-border/30 hover:bg-secondary/30">
+                          <td className="px-4 py-2.5 font-mono text-foreground">{d.dispatch_number}</td>
+                          <td className="px-4 py-2.5 text-foreground">{d.truck}</td>
+                          <td className="px-4 py-2.5 text-foreground">{d.customer}</td>
+                          <td className="px-4 py-2.5 text-foreground">{d.driver}</td>
+                          <td className="px-4 py-2.5">
+                            {editingVendor?.dispatchId === d.id ? (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  className="flex-1 bg-background border border-border rounded px-2 py-1 text-sm text-foreground min-w-0"
+                                  value={editingVendor.value}
+                                  autoFocus
+                                  onChange={e => setEditingVendor({ dispatchId: d.id, value: e.target.value })}
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter") saveVendorNote(d.id, editingVendor.value);
+                                    if (e.key === "Escape") setEditingVendor(null);
+                                  }}
+                                />
+                                <button onClick={() => saveVendorNote(d.id, editingVendor.value)} className="text-success hover:opacity-80">
+                                  <Check className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => setEditingVendor(null)} className="text-destructive hover:opacity-80">
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                className="flex items-center gap-1 text-muted-foreground hover:text-foreground group"
+                                onClick={() => setEditingVendor({ dispatchId: d.id, value: d.vendor || "" })}
+                              >
+                                <span>{d.vendor || <span className="italic opacity-50">Add vendor note</span>}</span>
+                                <Pencil className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Email share section */}
+              <div className="mt-4 border-t border-border/50 pt-4">
+                {!showEmailSection ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setShowEmailSection(true);
+                      // Body will be generated once the user picks a recipient
+                      setEmailBody("");
+                    }}
+                  >
+                    <Mail className="w-4 h-4 mr-2" />
+                    Share via Email
+                  </Button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium flex items-center gap-2">
+                        <Mail className="w-4 h-4 text-muted-foreground" /> Share via Email
+                      </p>
+                      <button
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => { setShowEmailSection(false); setSelectedEmailContact(""); setEmailBody(""); }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+
+                    {/* Recipient picker */}
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Recipient (Customer or Vendor)</Label>
+                      <Select
+                        value={selectedEmailContact}
+                        onValueChange={(id) => {
+                          setSelectedEmailContact(id);
+                          const contact = emailContacts.find(c => c.id === id) || null;
+                          const filtered = getFilteredDispatchesForContact(modalItem.dispatches, contact);
+                          setEmailBody(buildDefaultEmailBody(modalItem.reason, filtered, contact));
+                        }}
+                      >
+                        <SelectTrigger className="bg-secondary/50">
+                          <SelectValue placeholder="Select customer or vendor…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(() => {
+                            const customers = emailContacts.filter(c => c.type === "customer");
+                            const vendors = emailContacts.filter(c => c.type === "vendor");
+                            return (
+                              <>
+                                {customers.length > 0 && (
+                                  <>
+                                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Customers</div>
+                                    {customers.map(c => (
+                                      <SelectItem key={c.id} value={c.id}>
+                                        {c.label} <span className="text-muted-foreground text-xs ml-1">— {c.email}</span>
+                                      </SelectItem>
+                                    ))}
+                                  </>
+                                )}
+                                {vendors.length > 0 && (
+                                  <>
+                                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Vendors / Partners</div>
+                                    {vendors.map(c => (
+                                      <SelectItem key={c.id} value={c.id}>
+                                        {c.label} <span className="text-muted-foreground text-xs ml-1">— {c.email}</span>
+                                      </SelectItem>
+                                    ))}
+                                  </>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </SelectContent>
+                      </Select>
+                      {selectedEmailContact && (
+                        <p className="text-xs text-muted-foreground">
+                          To: <span className="text-foreground font-medium">{emailContacts.find(c => c.id === selectedEmailContact)?.email}</span>
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Email body */}
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">
+                        Message {!selectedEmailContact && <span className="text-muted-foreground/60">(select a recipient to generate)</span>}
+                      </Label>
+                      <Textarea
+                        value={emailBody}
+                        onChange={e => setEmailBody(e.target.value)}
+                        rows={8}
+                        placeholder={!selectedEmailContact ? "Select a recipient above — the message will be auto-filled with only their trips." : ""}
+                        className="bg-secondary/50 text-sm font-mono resize-none"
+                        disabled={!selectedEmailContact}
+                      />
+                    </div>
+
+                    <Button
+                      size="sm"
+                      onClick={() => sendDelayEmail(modalItem.reason, exportDispatches)}
+                      disabled={sendingEmail || !selectedEmailContact}
+                    >
+                      {sendingEmail
+                        ? <><span className="w-4 h-4 mr-2 border-2 border-white/30 border-t-white rounded-full animate-spin inline-block" />Sending…</>
+                        : <><Send className="w-4 h-4 mr-2" />Send Report</>
+                      }
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
     </DashboardLayout>
   );
 };
