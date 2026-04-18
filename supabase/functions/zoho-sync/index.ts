@@ -54,10 +54,9 @@ async function getZohoAccessToken(): Promise<string> {
 }
 
 // Parse line items from the notes string stored in the DB
-// Format: "Description (location): qty x ₦price|t:tonnage|v:vatType|sc:serviceCharge|scv:serviceChargeVat; ..."
+// Format: "Description: qty x ₦price|t:tonnage|v:vatType|sc:serviceCharge|scv:serviceChargeVat; ..."
 function parseLineItemsFromNotes(notes: string | null): Array<{
   description: string;
-  location: string;
   quantity: number;
   price: number;
   tonnage: string;
@@ -70,15 +69,15 @@ function parseLineItemsFromNotes(notes: string | null): Array<{
   const rawItems = itemsSection.split('; ').map(raw => raw.trim()).filter(Boolean);
   const parsed = rawItems.map(raw => {
     const [itemPart, ...metaParts] = raw.split('|');
-    const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
+    // Support old format with (location) in parens for backward compatibility with existing invoices
+    const match = itemPart.match(/^(.+?)(?:\s*\([^)]+\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
     if (!match) return null;
     const meta: Record<string, string> = {};
     metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v !== undefined) meta[k.trim()] = v.trim(); });
     return {
       description: match[1].trim(),
-      location: match[2] || '',
-      quantity: parseFloat(match[3]) || 1,
-      price: parseFloat(match[4].replace(/,/g, '')) || 0,
+      quantity: parseFloat(match[2]) || 1,
+      price: parseFloat(match[3].replace(/,/g, '')) || 0,
       tonnage: meta['t'] || '',
       vatType: meta['v'] || 'none',
       serviceCharge: meta['sc'] ? parseFloat(meta['sc']) : 0,
@@ -125,8 +124,6 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
       const tonnagePart = item.tonnage ? ` [${item.tonnage}]` : '';
       const rawName = `${item.description}${tonnagePart}`;
       const itemName = rawName.length > 200 ? rawName.substring(0, 197) + '...' : rawName;
-      const rawDesc = item.location || '';
-      const itemDescription = rawDesc.length > 200 ? rawDesc.substring(0, 197) + '...' : (rawDesc || undefined);
 
       // For inclusive VAT, extract the net rate (rate ÷ 1.075) so that when Zoho applies
       // its exclusive 7.5% on top it arrives at the same gross total as the platform.
@@ -137,7 +134,6 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
 
       const mainLine: any = {
         name: itemName,
-        description: itemDescription,
         quantity: item.quantity,
         rate: mainRate,
       };
@@ -156,7 +152,6 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
 
         const scLine: any = {
           name: (`${item.description} - Service Charge${tonnagePart}`).substring(0, 200),
-          description: itemDescription,
           quantity: 1,
           rate: scRate,
         };
@@ -506,7 +501,8 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { action, invoiceId, expenseId, billId, direction = 'to_zoho' } = await req.json();
+    const body = await req.json();
+    const { action, invoiceId, expenseId, billId, direction = 'to_zoho', paymentAccountId, paymentDate } = body;
     console.log('Zoho sync request:', { action, invoiceId, expenseId, billId, direction });
 
     const accessToken = await getZohoAccessToken();
@@ -1041,6 +1037,89 @@ serve(async (req) => {
 
         result.success = true;
         result.zoho_bill_id = zohoBillId;
+        break;
+      }
+
+      case 'sync_back_to_back': {
+        // Atomic sync: approved expense (marks paid) + new invoice (creates + records payment in Zoho)
+        const { data: expense, error: expErr } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('id', expenseId)
+          .single();
+        if (expErr || !expense) throw new Error(`Expense not found: ${expErr?.message}`);
+
+        const { data: invoice, error: invErr } = await supabase
+          .from('invoices')
+          .select('*, customers(company_name, zoho_contact_id)')
+          .eq('id', invoiceId)
+          .single();
+        if (invErr || !invoice) throw new Error(`Invoice not found: ${invErr?.message}`);
+
+        // 1. Sync expense to Zoho (marks paid via paid_through_account_id)
+        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense, supabase);
+        if (zohoExpenseId) {
+          await supabase.from('expenses')
+            .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
+            .eq('id', expenseId);
+        }
+
+        // 2. Sync invoice to Zoho (creates invoice record)
+        const customerName = (invoice as any).customers?.company_name || 'Unknown Customer';
+        const zohoInvoiceId = await syncInvoiceToZoho(accessToken, organizationId, invoice, customerName);
+        if (zohoInvoiceId) {
+          await supabase.from('invoices')
+            .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
+            .eq('id', invoiceId);
+
+          // 3. Mark invoice as collected in Zoho via customer payment
+          // Resolve Zoho account ID from the expense's bank account
+          let zohoAccountId: string | null = null;
+          if (paymentAccountId) {
+            const { data: bankAccount } = await supabase
+              .from('bank_accounts')
+              .select('zoho_account_id')
+              .eq('id', paymentAccountId)
+              .maybeSingle();
+            zohoAccountId = bankAccount?.zoho_account_id || null;
+          }
+
+          const zohoContactId = (invoice as any).customers?.zoho_contact_id || null;
+          // Resolve Zoho customer contact ID if not cached locally
+          const resolvedContactId = zohoContactId
+            || await resolveZohoCustomerId(accessToken, organizationId, customerName);
+
+          if (resolvedContactId && zohoAccountId) {
+            const paymentRes = await fetch(
+              `${ZOHO_BOOKS_URL()}/customerpayments?organization_id=${organizationId}`,
+              {
+                method: 'POST',
+                headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  customer_id: resolvedContactId,
+                  payment_mode: 'cash',
+                  amount: invoice.total_amount,
+                  date: paymentDate || new Date().toISOString().split('T')[0],
+                  invoices: [{ invoice_id: zohoInvoiceId, amount_applied: invoice.total_amount }],
+                  account_id: zohoAccountId,
+                  description: `Back-to-back payment — ${invoice.invoice_number}`,
+                }),
+              }
+            );
+            const paymentResult = await paymentRes.json();
+            if (paymentResult.code !== 0) {
+              console.warn('Customer payment creation returned non-zero code:', paymentResult.message || paymentResult.code);
+            } else {
+              console.log('Invoice marked as paid in Zoho via customer payment');
+            }
+          } else {
+            console.warn('Skipping Zoho payment record: missing zoho_contact_id or zoho_account_id');
+          }
+        }
+
+        result.success = true;
+        result.zoho_expense_id = zohoExpenseId;
+        result.zoho_invoice_id = zohoInvoiceId;
         break;
       }
 

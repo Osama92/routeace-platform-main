@@ -75,7 +75,6 @@ interface LineItem {
   description: string;
   quantity: number;
   price: number;
-  location?: string;
   tonnage?: string;
   vatType?: "none" | "inclusive" | "exclusive";
   serviceCharge?: number;
@@ -267,7 +266,7 @@ const InvoicesPage = () => {
     };
     setLineItems(prev => [
       ...prev,
-      { id: generateItemId(), type, description: descriptions[type], quantity: 1, price: 0, location: "", tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }
+      { id: generateItemId(), type, description: descriptions[type], quantity: 1, price: 0, tonnage: "", vatType: "none", serviceCharge: 0, serviceChargeVat: "none" }
     ]);
   };
 
@@ -522,7 +521,7 @@ const InvoicesPage = () => {
     try {
       // Encode each line item including per-item tonnage, vatType, serviceCharge
       const lineItemsNote = lineItems.map(item => {
-        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price}`;
+        let s = `${item.description}: ${item.quantity} x ₦${item.price}`;
         if (item.tonnage) s += `|t:${item.tonnage}`;
         if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
         if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
@@ -641,17 +640,18 @@ const InvoicesPage = () => {
       // Each item may have trailing pipe-separated metadata: |t:tonnage|v:vatType|sc:serviceCharge
       const [itemPart, ...metaParts] = raw.split('|');
       // Support both ₦1234 and ₦1,234 and plain 1234 formats
-      const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*[^\d]*([\d,]+(?:\.\d+)?)/);
+      const match = itemPart.match(/^(.+?)\s*:\s*(\d+(?:\.\d+)?)\s*x\s*[^\d]*([\d,]+(?:\.\d+)?)/);
       if (!match) return null;
       const meta: Record<string, string> = {};
       metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v) meta[k.trim()] = v.trim(); });
+      // Strip old "Description (location)" format — remove trailing (...) added by old location field
+      const rawDescription = match[1].trim().replace(/\s*\([^)]*\)\s*$/, '');
       return {
         id: generateItemId(),
         type: "delivery" as LineItem["type"],
-        description: match[1].trim(),
-        location: match[2] || "",
-        quantity: parseFloat(match[3]) || 1,
-        price: parseFloat(match[4].replace(/,/g, "")) || 0,
+        description: rawDescription,
+        quantity: parseFloat(match[2]) || 1,
+        price: parseFloat(match[3].replace(/,/g, "")) || 0,
         tonnage: meta["t"] || "",
         vatType: (meta["v"] as LineItem["vatType"]) || "none",
         serviceCharge: meta["sc"] ? parseFloat(meta["sc"]) : 0,
@@ -703,7 +703,7 @@ const InvoicesPage = () => {
     setSaving(true);
     try {
       const lineItemsNote = lineItems.map(item => {
-        let s = `${item.description}${item.location ? ` (${item.location})` : ''}: ${item.quantity} x ₦${item.price}`;
+        let s = `${item.description}: ${item.quantity} x ₦${item.price}`;
         if (item.tonnage) s += `|t:${item.tonnage}`;
         if (item.vatType && item.vatType !== "none") s += `|v:${item.vatType}`;
         if (item.serviceCharge && item.serviceCharge > 0) s += `|sc:${item.serviceCharge}`;
@@ -956,16 +956,17 @@ const InvoicesPage = () => {
         const itemsSection = notes.split('\n\nNotes:')[0];
         const items = itemsSection.split('; ').map((raw, index) => {
           const [itemPart, ...metaParts] = raw.split('|');
-          const match = itemPart.match(/^(.+?)(?:\s*\(([^)]+)\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*[^\d]*([\d,]+(?:\.\d+)?)/);
+          const match = itemPart.match(/^(.+?)\s*:\s*(\d+(?:\.\d+)?)\s*x\s*[^\d]*([\d,]+(?:\.\d+)?)/);
           if (!match) return null;
           const meta: Record<string, string> = {};
           metaParts.forEach(m => { const [k, v] = m.split(':'); if (k && v) meta[k.trim()] = v.trim(); });
+          // Strip old "Description (location)" format — remove trailing (...) added by old location field
+          const rawDesc = match[1].trim().replace(/\s*\([^)]*\)\s*$/, '');
           return {
             id: String(index + 1),
-            description: match[1].trim(),
-            location: match[2] || '',
-            quantity: parseFloat(match[3]) || 1,
-            price: parseFloat(match[4].replace(/,/g, '')) || 0,
+            description: rawDesc,
+            quantity: parseFloat(match[2]) || 1,
+            price: parseFloat(match[3].replace(/,/g, '')) || 0,
             tonnage: meta['t'] || '',
             vatType: meta['v'] || 'none',
             serviceCharge: meta['sc'] ? parseFloat(meta['sc']) : 0,
@@ -1131,12 +1132,10 @@ const InvoicesPage = () => {
       yPos += 28;
 
       // Items Table
-      // Build description as plain string — avoid \n in jsPDF cells to prevent
-      // letter-spacing artifacts. Use " · " as a readable inline separator.
       const tableData = lineItemsFromNotes.length > 0
         ? lineItemsFromNotes.map((item: any, index: number) => [
             index + 1,
-            item.location ? `${item.description}  ·  ${item.location}` : item.description,
+            item.description,
             item.tonnage || '—',
             item.quantity.toFixed(2),
             pdfFormatCurrency(item.price),
@@ -1145,7 +1144,7 @@ const InvoicesPage = () => {
         : [[
             1,
             invoice.dispatches
-              ? `Delivery Service  ·  ${invoice.dispatches.pickup_address?.split(',')[0]} \u2192 ${invoice.dispatches.delivery_address?.split(',')[0]}`
+              ? `Delivery: ${invoice.dispatches.pickup_address?.split(',')[0]} \u2192 ${invoice.dispatches.delivery_address?.split(',')[0]}`
               : "Service",
             '—',
             "1.00",
@@ -1624,15 +1623,6 @@ const InvoicesPage = () => {
                                   className="bg-secondary/50 h-9"
                                 />
 
-                                {/* Location (extra_drop only) */}
-                                {item.type === "extra_drop" && (
-                                  <Input
-                                    value={item.location ?? ""}
-                                    onChange={(e) => updateLineItem(item.id, "location", e.target.value)}
-                                    placeholder="Location"
-                                    className="bg-secondary/50 h-9"
-                                  />
-                                )}
 
                                 {/* Tonnage */}
                                 <Select
@@ -1834,7 +1824,6 @@ const InvoicesPage = () => {
                                     <td className="py-1 px-1 text-gray-900 align-top">{index + 1}</td>
                                     <td className="py-1 px-1 text-gray-900">
                                       <div className="font-medium">{item.description}</div>
-                                      {item.location && <div className="text-gray-500 text-[9px]">{item.location}</div>}
                                       {item.serviceCharge && item.serviceCharge > 0 && <div className="text-gray-500 text-[9px]">SC: ₦{item.serviceCharge.toLocaleString()}</div>}
                                       {item.vatType && item.vatType !== "none" && <div className="text-gray-400 text-[9px]">VAT {item.vatType}</div>}
                                     </td>
@@ -2213,9 +2202,6 @@ const InvoicesPage = () => {
                           )}
                         </div>
                         <Input value={item.description} onChange={(e) => updateLineItem(item.id, "description", e.target.value)} placeholder="Description" className="bg-secondary/50 h-9" />
-                        {item.type === "extra_drop" && (
-                          <Input value={item.location ?? ""} onChange={(e) => updateLineItem(item.id, "location", e.target.value)} placeholder="Location" className="bg-secondary/50 h-9" />
-                        )}
                         <Select value={item.tonnage ?? ""} onValueChange={(v) => updateLineItem(item.id, "tonnage", v)}>
                           <SelectTrigger className="bg-secondary/50 h-9 text-xs"><SelectValue placeholder="T (Tonnage)" /></SelectTrigger>
                           <SelectContent>
@@ -2368,7 +2354,6 @@ const InvoicesPage = () => {
                             <td className="py-1 px-1 text-gray-900 align-top">{index + 1}</td>
                             <td className="py-1 px-1 text-gray-900">
                               <div className="font-medium">{item.description}</div>
-                              {item.location && <div className="text-gray-500 text-[9px]">{item.location}</div>}
                               {item.serviceCharge && item.serviceCharge > 0 && <div className="text-gray-500 text-[9px]">SC: ₦{item.serviceCharge.toLocaleString()}</div>}
                               {item.vatType && item.vatType !== "none" && <div className="text-gray-400 text-[9px]">VAT {item.vatType}</div>}
                             </td>

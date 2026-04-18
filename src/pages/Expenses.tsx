@@ -194,6 +194,13 @@ const Expenses = () => {
 
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<string>("");
+  const [isBackToBack, setIsBackToBack] = useState(false);
+  const [b2bFormData, setB2bFormData] = useState({
+    customer_id: "",
+    invoice_amount: "",
+    description: "",
+    invoice_date: format(new Date(), "yyyy-MM-dd"),
+  });
 
   const canManage = hasAnyRole(["admin", "operations", "support", "dispatcher"]);
 
@@ -345,10 +352,68 @@ const Expenses = () => {
         });
       }
 
-      toast({
-        title: "Success",
-        description: "Expense submitted for approval",
-      });
+      // Back-to-back: create linked invoice, auto-approve both, sync to Zoho
+      if (isBackToBack && b2bFormData.customer_id && data) {
+        const invoiceAmount = b2bFormData.invoice_amount
+          ? parseFloat(b2bFormData.invoice_amount)
+          : parseFloat(formData.amount);
+        const invoiceDesc = b2bFormData.description || formData.description || "Pass-through charge";
+        const lineItemsNote = `${invoiceDesc}: 1 x ₦${invoiceAmount}|v:none`;
+        const invoiceNumber = `BTB-${Date.now().toString().slice(-6)}`;
+
+        const { data: invData, error: invError } = await supabase
+          .from("invoices")
+          .insert({
+            invoice_number: invoiceNumber,
+            customer_id: b2bFormData.customer_id,
+            amount: invoiceAmount,
+            tax_amount: 0,
+            total_amount: invoiceAmount,
+            tax_type: "none",
+            invoice_date: b2bFormData.invoice_date,
+            notes: lineItemsNote,
+            status: "paid",
+            paid_date: b2bFormData.invoice_date,
+            created_by: user?.id,
+          })
+          .select()
+          .single();
+
+        if (invError) {
+          toast({ title: "Expense saved, but invoice failed", description: invError.message, variant: "destructive" });
+        } else {
+          // Auto-approve the expense so Zoho sync accepts it
+          await supabase.from("expenses").update({
+            approval_status: "approved",
+            first_approved_at: new Date().toISOString(),
+            first_approver_id: user?.id,
+            second_approved_at: new Date().toISOString(),
+            second_approver_id: user?.id,
+          }).eq("id", data.id);
+
+          // Sync both to Zoho via sync_back_to_back
+          const { data: syncResult, error: syncError } = await supabase.functions.invoke("zoho-sync", {
+            body: {
+              action: "sync_back_to_back",
+              expenseId: data.id,
+              invoiceId: invData.id,
+              paymentAccountId: formData.payment_account_id || null,
+              paymentDate: b2bFormData.invoice_date,
+            },
+          });
+
+          if (syncError || !syncResult?.success) {
+            toast({ title: "Back-to-back saved (Zoho sync failed)", description: syncError?.message || syncResult?.error || "Sync error", variant: "destructive" });
+          } else {
+            toast({ title: "Back-to-back recorded & synced", description: `Expense + Invoice ${invoiceNumber} raised, marked paid, synced to Zoho.` });
+          }
+        }
+      } else {
+        toast({
+          title: "Success",
+          description: "Expense submitted for approval",
+        });
+      }
       setIsDialogOpen(false);
       resetForm();
       fetchData();
@@ -383,6 +448,8 @@ const Expenses = () => {
     setReceiptFile(null);
     setReceiptPreview("");
     setEditingExpense(null);
+    setIsBackToBack(false);
+    setB2bFormData({ customer_id: "", invoice_amount: "", description: "", invoice_date: format(new Date(), "yyyy-MM-dd") });
   };
 
   const handleOpenEdit = (expense: Expense) => {
@@ -859,26 +926,115 @@ const Expenses = () => {
                     </p>
                     
                     {formData.is_cogs && (
-                      <div className="space-y-2 mt-2">
-                        <Label>COGS Vendor</Label>
-                        <Select
-                          value={formData.cogs_vendor_id}
-                          onValueChange={(value) =>
-                            setFormData((prev) => ({ ...prev, cogs_vendor_id: value }))
-                          }
-                        >
-                          <SelectTrigger className="bg-background">
-                            <SelectValue placeholder="Select 3rd party vendor" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {vendors.map((vendor) => (
-                              <SelectItem key={vendor.id} value={vendor.id}>
-                                {vendor.company_name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      <>
+                        <div className="space-y-2 mt-2">
+                          <Label>COGS Vendor</Label>
+                          <Select
+                            value={formData.cogs_vendor_id}
+                            onValueChange={(value) =>
+                              setFormData((prev) => ({ ...prev, cogs_vendor_id: value }))
+                            }
+                          >
+                            <SelectTrigger className="bg-background">
+                              <SelectValue placeholder="Select 3rd party vendor" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {vendors.map((vendor) => (
+                                <SelectItem key={vendor.id} value={vendor.id}>
+                                  {vendor.company_name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Back-to-back charge toggle */}
+                        <div className="mt-3 pt-3 border-t border-border/50">
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id="is_back_to_back"
+                              checked={isBackToBack}
+                              onCheckedChange={(checked) => setIsBackToBack(checked === true)}
+                            />
+                            <Label htmlFor="is_back_to_back" className="font-medium text-sm">
+                              Back-to-back charge — raise matching invoice
+                            </Label>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Automatically raises a linked invoice to the customer for this cost. Both are marked as paid and synced to Zoho. Net P&amp;L = ₦0.
+                          </p>
+
+                          {isBackToBack && (
+                            <div className="mt-3 space-y-3 p-3 bg-background/60 rounded-md border border-border/50">
+                              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Invoice Details</p>
+
+                              {/* Bill To Customer */}
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <Label className="text-sm">Bill To (Customer) *</Label>
+                                  <button
+                                    type="button"
+                                    onClick={syncCustomersFromZoho}
+                                    disabled={syncingCustomers}
+                                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                  >
+                                    {syncingCustomers ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CloudDownload className="w-3 h-3" />}
+                                    Sync from Zoho
+                                  </button>
+                                </div>
+                                <Select
+                                  value={b2bFormData.customer_id}
+                                  onValueChange={(v) => setB2bFormData(prev => ({ ...prev, customer_id: v }))}
+                                >
+                                  <SelectTrigger className="bg-background">
+                                    <SelectValue placeholder="Select customer" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {customers.map(c => (
+                                      <SelectItem key={c.id} value={c.id}>{c.company_name}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              {/* Invoice Amount */}
+                              <div className="space-y-1">
+                                <Label className="text-sm">Invoice Amount (₦)</Label>
+                                <Input
+                                  type="number"
+                                  placeholder={formData.amount || "Same as expense"}
+                                  value={b2bFormData.invoice_amount}
+                                  onChange={(e) => setB2bFormData(prev => ({ ...prev, invoice_amount: e.target.value }))}
+                                  className="bg-background"
+                                />
+                                <p className="text-xs text-muted-foreground">Leave blank to match expense amount</p>
+                              </div>
+
+                              {/* Description */}
+                              <div className="space-y-1">
+                                <Label className="text-sm">Invoice Description</Label>
+                                <Input
+                                  placeholder={formData.description || "Pass-through charge"}
+                                  value={b2bFormData.description}
+                                  onChange={(e) => setB2bFormData(prev => ({ ...prev, description: e.target.value }))}
+                                  className="bg-background"
+                                />
+                              </div>
+
+                              {/* Invoice Date */}
+                              <div className="space-y-1">
+                                <Label className="text-sm">Invoice Date</Label>
+                                <Input
+                                  type="date"
+                                  value={b2bFormData.invoice_date}
+                                  onChange={(e) => setB2bFormData(prev => ({ ...prev, invoice_date: e.target.value }))}
+                                  className="bg-background"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </>
                     )}
                   </div>
 
