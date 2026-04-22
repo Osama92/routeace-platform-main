@@ -116,7 +116,7 @@ const Customers = () => {
   const [saving, setSaving] = useState(false);
   const [syncingZoho, setSyncingZoho] = useState(false);
   const { toast } = useToast();
-  const { user, hasAnyRole } = useAuth();
+  const { user, hasAnyRole, orgId } = useAuth();
   const { logChange } = useAuditLog();
 
   const [formData, setFormData] = useState({
@@ -184,7 +184,7 @@ const Customers = () => {
     setSyncingZoho(true);
     try {
       const { data, error } = await supabase.functions.invoke('zoho-sync', {
-        body: { action: 'fetch_customers' },
+        body: { action: 'fetch_customers', orgId },
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || 'Sync failed');

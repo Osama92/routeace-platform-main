@@ -111,6 +111,13 @@ const ProfitLossPage = () => {
         .gte("expense_date", format(start, "yyyy-MM-dd"))
         .lte("expense_date", format(end, "yyyy-MM-dd"));
 
+      // Fetch bills — full bill amount counts toward COGS
+      const { data: periodBills } = await (supabase as any)
+        .from("bills")
+        .select("amount, bill_date")
+        .gte("bill_date", format(start, "yyyy-MM-dd"))
+        .lte("bill_date", format(end, "yyyy-MM-dd"));
+
       // Fetch dispatches count
       const { count: dispatchCount } = await supabase
         .from("dispatches")
@@ -121,7 +128,8 @@ const ProfitLossPage = () => {
       // Calculate P&L
       const revenue = (invoices || []).reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
       const approvedExpenses = (expenses || []).filter(e => e.approval_status === "approved");
-      const cogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+      const billsCogs = ((periodBills as any[]) || []).reduce((sum: number, bill: any) => sum + Number(bill.amount || 0), 0);
+      const cogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0) + billsCogs;
       const operatingExpenses = approvedExpenses.filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
       const grossProfit = revenue - cogs;
       const netProfit = grossProfit - operatingExpenses;
@@ -185,15 +193,23 @@ const ProfitLossPage = () => {
           .gte("created_at", monthStart.toISOString())
           .lte("created_at", monthEnd.toISOString());
 
-        const { data: monthExpenses } = await supabase
-          .from("expenses")
-          .select("amount, is_cogs, approval_status")
-          .gte("expense_date", format(monthStart, "yyyy-MM-dd"))
-          .lte("expense_date", format(monthEnd, "yyyy-MM-dd"));
+        const [{ data: monthExpenses }, { data: monthBills }] = await Promise.all([
+          supabase
+            .from("expenses")
+            .select("amount, is_cogs, approval_status")
+            .gte("expense_date", format(monthStart, "yyyy-MM-dd"))
+            .lte("expense_date", format(monthEnd, "yyyy-MM-dd")),
+          (supabase as any)
+            .from("bills")
+            .select("amount, bill_date")
+            .gte("bill_date", format(monthStart, "yyyy-MM-dd"))
+            .lte("bill_date", format(monthEnd, "yyyy-MM-dd")),
+        ]);
 
         const approvedMonthExpenses = (monthExpenses || []).filter(e => e.approval_status === "approved");
+        const monthBillsCogs = ((monthBills as any[]) || []).reduce((sum: number, bill: any) => sum + Number(bill.amount || 0), 0);
         const monthRevenue = (monthInvoices || []).reduce((sum, inv) => sum + Number(inv.total_amount || 0), 0);
-        const monthCogs = approvedMonthExpenses.filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
+        const monthCogs = approvedMonthExpenses.filter(e => e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0) + monthBillsCogs;
         const monthOpex = approvedMonthExpenses.filter(e => !e.is_cogs).reduce((sum, e) => sum + Number(e.amount || 0), 0);
         const monthGrossProfit = monthRevenue - monthCogs;
         const monthNetProfit = monthGrossProfit - monthOpex;

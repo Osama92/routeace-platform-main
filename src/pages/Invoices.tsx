@@ -226,7 +226,7 @@ const InvoicesPage = () => {
   const [fetchingZoho, setFetchingZoho] = useState(false);
   const [syncingCustomers, setSyncingCustomers] = useState(false);
   const { toast } = useToast();
-  const { user, hasAnyRole, userRole } = useAuth();
+  const { user, hasAnyRole, userRole, orgId } = useAuth();
   const { logChange } = useAuditLog();
 
   const canManage = hasAnyRole(["admin", "operations"]);
@@ -425,7 +425,7 @@ const InvoicesPage = () => {
     setSyncingCustomers(true);
     try {
       const { data, error } = await supabase.functions.invoke("zoho-sync", {
-        body: { action: "fetch_customers" },
+        body: { action: "fetch_customers", orgId },
       });
       if (error) throw error;
       await fetchCustomers();
@@ -744,7 +744,7 @@ const InvoicesPage = () => {
       if (shouldSync) {
         try {
           const { data: syncData, error: syncError } = await supabase.functions.invoke('zoho-sync', {
-            body: { action: 'sync_invoice', invoiceId: editingInvoice.id },
+            body: { action: 'sync_invoice', invoiceId: editingInvoice.id, orgId },
           });
           // When the edge function returns non-2xx, syncData is null and syncError.message
           // is the generic "Edge Function returned a non-2xx status code".
@@ -872,6 +872,7 @@ const InvoicesPage = () => {
         body: {
           action: invoiceId ? 'sync_invoice' : 'sync_all_invoices',
           invoiceId,
+          orgId,
         },
       });
 
@@ -906,7 +907,7 @@ const InvoicesPage = () => {
     setFetchingZoho(true);
     try {
       const { data, error } = await supabase.functions.invoke('zoho-sync', {
-        body: { action: 'fetch_invoices' },
+        body: { action: 'fetch_invoices', orgId },
       });
       if (error) throw error;
       if (data?.success === false) throw new Error(data.error);

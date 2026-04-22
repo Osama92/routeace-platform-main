@@ -6,12 +6,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Zoho API endpoints
-// Auth uses accounts.zoho.com, but API calls must use zohoapis.com domain
-// Regional domains: zohoapis.com (US), zohoapis.eu (EU), zohoapis.in (India), zohoapis.com.au (Australia)
-const getZohoRegion = () => Deno.env.get('ZOHO_REGION') || 'com'; // com, eu, in, com.au
-const ZOHO_ACCOUNTS_URL = () => `https://accounts.zoho.${getZohoRegion()}`;
-const ZOHO_BOOKS_URL = () => `https://www.zohoapis.${getZohoRegion()}/books/v3`;
+// Regional URL builders — all helpers receive `region` so per-org regions are honoured
+const ZOHO_ACCOUNTS_URL = (region: string) => `https://accounts.zoho.${region}`;
+const ZOHO_BOOKS_URL = (region: string) => `https://www.zohoapis.${region}/books/v3`;
+
+interface ZohoCreds {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  organizationId: string;
+  region: string;
+}
 
 interface ZohoTokenResponse {
   access_token: string;
@@ -19,33 +24,22 @@ interface ZohoTokenResponse {
   expires_in: number;
 }
 
-async function getZohoAccessToken(): Promise<string> {
-  const clientId = Deno.env.get('ZOHO_CLIENT_ID');
-  const clientSecret = Deno.env.get('ZOHO_CLIENT_SECRET');
-  const refreshToken = Deno.env.get('ZOHO_REFRESH_TOKEN');
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Missing Zoho credentials');
-  }
-
+async function getZohoAccessToken(creds: ZohoCreds): Promise<string> {
   const params = new URLSearchParams({
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
+    refresh_token: creds.refreshToken,
+    client_id: creds.clientId,
+    client_secret: creds.clientSecret,
     grant_type: 'refresh_token',
   });
 
-  const response = await fetch(`${ZOHO_ACCOUNTS_URL()}/oauth/v2/token`, {
+  const response = await fetch(`${ZOHO_ACCOUNTS_URL(creds.region)}/oauth/v2/token`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error('Zoho token error:', errorText);
     throw new Error(`Failed to get Zoho access token (${response.status}): ${errorText}`);
   }
 
@@ -69,7 +63,6 @@ function parseLineItemsFromNotes(notes: string | null): Array<{
   const rawItems = itemsSection.split('; ').map(raw => raw.trim()).filter(Boolean);
   const parsed = rawItems.map(raw => {
     const [itemPart, ...metaParts] = raw.split('|');
-    // Support old format with (location) in parens for backward compatibility with existing invoices
     const match = itemPart.match(/^(.+?)(?:\s*\([^)]+\))?\s*:\s*(\d+(?:\.\d+)?)\s*x\s*₦?([\d,]+(?:\.\d+)?)/);
     if (!match) return null;
     const meta: Record<string, string> = {};
@@ -90,19 +83,19 @@ function parseLineItemsFromNotes(notes: string | null): Array<{
 async function resolveZohoCustomerId(
   accessToken: string,
   organizationId: string,
-  customerName: string
+  customerName: string,
+  region: string
 ): Promise<string | null> {
   const customersResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name_contains=${encodeURIComponent(customerName)}`,
+    `${ZOHO_BOOKS_URL(region)}/contacts?organization_id=${organizationId}&contact_name_contains=${encodeURIComponent(customerName)}`,
     { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
   );
   const customersData = await customersResponse.json();
   if (customersData.contacts && customersData.contacts.length > 0) {
     return customersData.contacts[0].contact_id;
   }
-  // Create customer in Zoho
   const createCustomerResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL(region)}/contacts?organization_id=${organizationId}`,
     {
       method: 'POST',
       headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
@@ -119,29 +112,16 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
   const parsedItems = parseLineItemsFromNotes(invoice.notes);
   if (parsedItems.length > 0) {
     return parsedItems.flatMap(item => {
-      // Zoho line item: name = item/product name, description = free-text detail shown below item name
-      // We put tonnage in the name so it appears in the item column, and location in description
       const tonnagePart = item.tonnage ? ` [${item.tonnage}]` : '';
       const rawName = `${item.description}${tonnagePart}`;
       const itemName = rawName.length > 200 ? rawName.substring(0, 197) + '...' : rawName;
 
-      // For inclusive VAT, extract the net rate (rate ÷ 1.075) so that when Zoho applies
-      // its exclusive 7.5% on top it arrives at the same gross total as the platform.
-      // Zoho does not honour is_inclusive_tax at line-item level on invoices.
       const mainRate = item.vatType === 'inclusive'
         ? Math.round((item.price / 1.075) * 100) / 100
         : item.price;
 
-      const mainLine: any = {
-        name: itemName,
-        quantity: item.quantity,
-        rate: mainRate,
-      };
-
-      // Apply VAT on main line item (always as exclusive in Zoho — rate already adjusted above)
-      if (vatTaxId && item.vatType !== 'none') {
-        mainLine.tax_id = vatTaxId;
-      }
+      const mainLine: any = { name: itemName, quantity: item.quantity, rate: mainRate };
+      if (vatTaxId && item.vatType !== 'none') mainLine.tax_id = vatTaxId;
 
       const lines: any[] = [mainLine];
 
@@ -149,16 +129,12 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
         const scRate = item.serviceChargeVat === 'inclusive'
           ? Math.round((item.serviceCharge / 1.075) * 100) / 100
           : item.serviceCharge;
-
         const scLine: any = {
           name: (`${item.description} - Service Charge${tonnagePart}`).substring(0, 200),
           quantity: 1,
           rate: scRate,
         };
-        // Apply VAT on service charge line
-        if (vatTaxId && item.serviceChargeVat !== 'none') {
-          scLine.tax_id = vatTaxId;
-        }
+        if (vatTaxId && item.serviceChargeVat !== 'none') scLine.tax_id = vatTaxId;
         lines.push(scLine);
       }
 
@@ -168,21 +144,16 @@ function buildZohoLineItems(invoice: any, vatTaxId?: string): any[] {
   return [{ name: 'Delivery Service', quantity: 1, rate: invoice.amount }];
 }
 
-async function resolveVatTaxId(accessToken: string, organizationId: string): Promise<string | undefined> {
+async function resolveVatTaxId(accessToken: string, organizationId: string, region: string): Promise<string | undefined> {
   try {
-    const res = await fetch(`${ZOHO_BOOKS_URL()}/settings/taxes?organization_id=${organizationId}`, {
+    const res = await fetch(`${ZOHO_BOOKS_URL(region)}/settings/taxes?organization_id=${organizationId}`, {
       headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
     });
     const data = await res.json();
     const taxes: any[] = data.taxes || [];
-    // Look for a 7.5% VAT tax (Nigerian standard VAT)
     const vat = taxes.find((t: any) => Math.abs(Number(t.tax_percentage) - 7.5) < 0.01)
       || taxes.find((t: any) => t.tax_name?.toLowerCase().includes('vat'));
-    if (vat) {
-      console.log('Found Zoho VAT tax:', vat.tax_name, vat.tax_id);
-      return vat.tax_id;
-    }
-    console.warn('No VAT tax found in Zoho — line item taxes will be omitted');
+    if (vat) return vat.tax_id;
     return undefined;
   } catch (e) {
     console.error('Failed to fetch Zoho taxes:', e);
@@ -194,55 +165,40 @@ async function syncInvoiceToZoho(
   accessToken: string,
   organizationId: string,
   invoice: any,
-  customerName: string
+  customerName: string,
+  region: string
 ): Promise<string | null> {
-  console.log('Syncing invoice to Zoho:', invoice.invoice_number, 'existing zoho_id:', invoice.zoho_invoice_id || 'none');
+  console.log('Syncing invoice to Zoho:', invoice.invoice_number);
 
-  const zohoCustomerId = await resolveZohoCustomerId(accessToken, organizationId, customerName);
+  const zohoCustomerId = await resolveZohoCustomerId(accessToken, organizationId, customerName, region);
   if (!zohoCustomerId) return null;
 
-  const vatTaxId = await resolveVatTaxId(accessToken, organizationId);
+  const vatTaxId = await resolveVatTaxId(accessToken, organizationId, region);
   const zohoLineItems = buildZohoLineItems(invoice, vatTaxId);
   const userNotes = invoice.notes?.includes('\n\nNotes:')
     ? invoice.notes.split('\n\nNotes:')[1].trim() : '';
 
-  // Base payload shared by create and update
   const baseInvoiceData: any = {
     customer_id: zohoCustomerId,
     date: invoice.invoice_date || invoice.created_at.split('T')[0],
     due_date: invoice.due_date || undefined,
     line_items: zohoLineItems,
     notes: userNotes || undefined,
-    // Required by Zoho when updating a sent invoice
     reason: 'Invoice updated via RouteAce platform',
   };
 
-  // If invoice already exists in Zoho → UPDATE (PUT) it instead of creating a duplicate
-  // NOTE: invoice_number is intentionally omitted from PUT — Zoho treats it as immutable
-  // and returns "Invoice number already exists" if you re-send it on an update.
   if (invoice.zoho_invoice_id) {
-    console.log('Updating existing Zoho invoice:', invoice.zoho_invoice_id);
-
-    // Zoho rejects PUT on sent/void invoices — try to convert back to draft first
     try {
-      const markDraftResponse = await fetch(
-        `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}/status/draft?organization_id=${organizationId}`,
-        {
-          method: 'POST',
-          headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
-        }
+      await fetch(
+        `${ZOHO_BOOKS_URL(region)}/invoices/${invoice.zoho_invoice_id}/status/draft?organization_id=${organizationId}`,
+        { method: 'POST', headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
       );
-      const draftText = await markDraftResponse.text();
-      const draftResult = draftText ? JSON.parse(draftText) : {};
-      if (draftResult.code !== 0) {
-        console.warn('Could not mark invoice as draft before update:', draftResult.message || draftResult.code);
-      }
     } catch (e) {
-      console.warn('Draft status call failed (non-critical), proceeding with PUT:', e);
+      console.warn('Draft status call failed (non-critical):', e);
     }
 
     const updateResponse = await fetch(
-      `${ZOHO_BOOKS_URL()}/invoices/${invoice.zoho_invoice_id}?organization_id=${organizationId}`,
+      `${ZOHO_BOOKS_URL(region)}/invoices/${invoice.zoho_invoice_id}?organization_id=${organizationId}`,
       {
         method: 'PUT',
         headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
@@ -250,24 +206,15 @@ async function syncInvoiceToZoho(
       }
     );
     const updateResult = await updateResponse.json();
-    if (updateResult.invoice?.invoice_id) {
-      console.log('Zoho invoice updated:', updateResult.invoice.invoice_id);
-      return updateResult.invoice.invoice_id;
-    }
-    // If Zoho returns "Invoice does not exist", fall through to create a new one
-    if (updateResult.code === 1002 || updateResult.code === 5) {
-      console.warn('Zoho invoice not found by ID, creating new one instead');
-    } else {
-      console.error('Failed to update invoice in Zoho:', JSON.stringify(updateResult));
+    if (updateResult.invoice?.invoice_id) return updateResult.invoice.invoice_id;
+    if (updateResult.code !== 1002 && updateResult.code !== 5) {
       throw new Error(updateResult.message || `Zoho PUT failed (code ${updateResult.code})`);
     }
   }
 
-  // CREATE new invoice in Zoho (include invoice_number only on create)
-  console.log('Creating new Zoho invoice');
   const createPayload = { ...baseInvoiceData, invoice_number: invoice.invoice_number };
   const createResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL(region)}/invoices?organization_id=${organizationId}`,
     {
       method: 'POST',
       headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
@@ -275,17 +222,10 @@ async function syncInvoiceToZoho(
     }
   );
   const invoiceResult = await createResponse.json();
-
-  if (invoiceResult.invoice?.invoice_id) {
-    console.log('Invoice created in Zoho:', invoiceResult.invoice.invoice_id);
-    return invoiceResult.invoice.invoice_id;
-  }
-
-  console.error('Failed to create invoice in Zoho:', invoiceResult);
+  if (invoiceResult.invoice?.invoice_id) return invoiceResult.invoice.invoice_id;
   throw new Error(invoiceResult.message || 'Failed to create invoice in Zoho');
 }
 
-// Map RouteAce expense categories to Zoho account names
 const expenseCategoryToZohoAccount: Record<string, string> = {
   'fuel': 'Fuel/Mileage Expenses',
   'maintenance': 'Repairs and Maintenance',
@@ -312,99 +252,62 @@ const expenseCategoryToZohoAccount: Record<string, string> = {
 async function getExpenseAccountId(
   accessToken: string,
   organizationId: string,
+  region: string,
   category?: string
 ): Promise<string | null> {
   const targetAccountName = category ? expenseCategoryToZohoAccount[category] : null;
 
-  // Fetch ALL chart of accounts (no filter) to avoid case-sensitivity issues with account_type param
   const accountsResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}`,
-    {
-      headers: {
-        'Authorization': `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    }
+    `${ZOHO_BOOKS_URL(region)}/chartofaccounts?organization_id=${organizationId}`,
+    { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
   );
-
   const accountsData = await accountsResponse.json();
 
-  if (!accountsData.chartofaccounts || accountsData.chartofaccounts.length === 0) {
-    console.error('No accounts found in Zoho Chart of Accounts');
-    return null;
-  }
+  if (!accountsData.chartofaccounts?.length) return null;
 
-  // Filter to only expense-type accounts (expense, cost_of_goods_sold)
   const expenseAccountTypes = ['expense', 'cost_of_goods_sold'];
   const accounts = accountsData.chartofaccounts.filter((acc: any) =>
     expenseAccountTypes.includes(acc.account_type?.toLowerCase())
   );
 
-  console.log(`Found ${accounts.length} expense accounts in Zoho (out of ${accountsData.chartofaccounts.length} total)`);
+  if (accounts.length === 0) return null;
 
-  if (accounts.length === 0) {
-    console.error('No expense-type accounts found in Zoho. Available account types:',
-      [...new Set(accountsData.chartofaccounts.map((a: any) => a.account_type))]);
-    return null;
-  }
-
-  // Try to find a matching account by name
   if (targetAccountName) {
-    const matchingAccount = accounts.find((acc: any) =>
+    const match = accounts.find((acc: any) =>
       acc.account_name.toLowerCase().includes(targetAccountName.toLowerCase()) ||
       targetAccountName.toLowerCase().includes(acc.account_name.toLowerCase())
     );
-    if (matchingAccount) {
-      console.log(`Found matching Zoho account for category "${category}":`, matchingAccount.account_name, matchingAccount.account_id);
-      return matchingAccount.account_id;
-    }
-    console.log(`No exact match for "${targetAccountName}", trying fallbacks...`);
+    if (match) return match.account_id;
   }
 
-  // Fallback: Look for common expense account names
   const fallbackNames = ['Miscellaneous Expenses', 'Other Expenses', 'Operating Expenses', 'General Expenses', 'Office Supplies'];
   for (const name of fallbackNames) {
-    const fallbackAccount = accounts.find((acc: any) =>
-      acc.account_name.toLowerCase().includes(name.toLowerCase())
-    );
-    if (fallbackAccount) {
-      console.log(`Using fallback Zoho expense account:`, fallbackAccount.account_name, fallbackAccount.account_id);
-      return fallbackAccount.account_id;
-    }
+    const fallback = accounts.find((acc: any) => acc.account_name.toLowerCase().includes(name.toLowerCase()));
+    if (fallback) return fallback.account_id;
   }
 
-  // Last resort: use the first expense account available
-  console.log(`Using first available Zoho expense account:`, accounts[0].account_name, accounts[0].account_id);
   return accounts[0].account_id;
 }
 
 async function syncExpenseToZoho(
   accessToken: string,
   organizationId: string,
+  region: string,
   expense: any,
   supabase?: any
 ): Promise<string | null> {
-  console.log('Syncing expense to Zoho:', expense.description);
-
-  // Get appropriate expense account ID based on category
-  const accountId = await getExpenseAccountId(accessToken, organizationId, expense.category);
-
-  if (!accountId) {
-    console.error('Could not find a valid expense account in Zoho');
-    return null;
-  }
+  const accountId = await getExpenseAccountId(accessToken, organizationId, region, expense.category);
+  if (!accountId) throw new Error('Could not find a valid expense account in Zoho');
 
   const zohoExpenseData: Record<string, any> = {
     account_id: accountId,
     date: expense.expense_date,
     amount: expense.amount,
     description: expense.description || `${expense.category || 'Expense'} - ${expense.expense_date}`,
-    reference_number: expense.id?.substring(0, 50), // Zoho has a limit on reference number length
+    reference_number: expense.id?.substring(0, 50),
   };
 
-  // Add paid_through_account_id if a bank account is linked
   if (expense.payment_account_id) {
-    // Look up the Zoho account ID from our bank_accounts table
     const { data: bankAccount } = await supabase
       .from('bank_accounts')
       .select('zoho_account_id')
@@ -415,74 +318,22 @@ async function syncExpenseToZoho(
     }
   }
 
-  // Add vendor if available (for driver salary expenses)
-  if (expense.driver_id) {
-    zohoExpenseData.vendor_name = expense.notes?.includes('Salary payment')
-      ? expense.description?.split(' - ')[1]?.split(' (')[0] || 'Driver'
-      : undefined;
-  }
-
-  // Add notes if available
   if (expense.notes) {
     zohoExpenseData.description = `${zohoExpenseData.description}\n${expense.notes}`;
   }
 
   const createExpenseResponse = await fetch(
-    `${ZOHO_BOOKS_URL()}/expenses?organization_id=${organizationId}`,
+    `${ZOHO_BOOKS_URL(region)}/expenses?organization_id=${organizationId}`,
     {
       method: 'POST',
-      headers: {
-        'Authorization': `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(zohoExpenseData),
     }
   );
 
   const expenseResult = await createExpenseResponse.json();
-
-  if (expenseResult.expense?.expense_id) {
-    console.log('Expense synced to Zoho:', expenseResult.expense.expense_id);
-    return expenseResult.expense.expense_id;
-  }
-
-  const errorMsg = expenseResult?.message || JSON.stringify(expenseResult);
-  console.error('Failed to create expense in Zoho:', errorMsg);
-  throw new Error(`Zoho API error: ${errorMsg}`);
-}
-
-async function fetchInvoicesFromZoho(accessToken: string, organizationId: string) {
-  console.log('Fetching invoices from Zoho...');
-  
-  const response = await fetch(
-    `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}`,
-    {
-      headers: {
-        'Authorization': `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-
-  const data = await response.json();
-  return data.invoices || [];
-}
-
-async function fetchExpensesFromZoho(accessToken: string, organizationId: string) {
-  console.log('Fetching expenses from Zoho...');
-  
-  const response = await fetch(
-    `${ZOHO_BOOKS_URL()}/expenses?organization_id=${organizationId}`,
-    {
-      headers: {
-        'Authorization': `Zoho-oauthtoken ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-
-  const data = await response.json();
-  return data.expenses || [];
+  if (expenseResult.expense?.expense_id) return expenseResult.expense.expense_id;
+  throw new Error(`Zoho API error: ${expenseResult?.message || JSON.stringify(expenseResult)}`);
 }
 
 serve(async (req) => {
@@ -493,53 +344,81 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const organizationId = Deno.env.get('ZOHO_ORGANIZATION_ID');
-
-    if (!organizationId) {
-      throw new Error('Missing ZOHO_ORGANIZATION_ID');
-    }
-
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const body = await req.json();
-    const { action, invoiceId, expenseId, billId, direction = 'to_zoho', paymentAccountId, paymentDate } = body;
-    console.log('Zoho sync request:', { action, invoiceId, expenseId, billId, direction });
+    const { action, orgId, invoiceId, expenseId, billId, direction = 'to_zoho', paymentAccountId, paymentDate } = body;
 
-    const accessToken = await getZohoAccessToken();
+    // ── Resolve Zoho credentials ──────────────────────────────
+    // 1. Try org_integrations table (per-tenant creds)
+    // 2. Fall back to environment variables (Tenant 1 / legacy)
+    let creds: ZohoCreds | null = null;
+
+    if (orgId) {
+      const { data: integration } = await supabase
+        .from('org_integrations')
+        .select('*')
+        .eq('org_id', orgId)
+        .maybeSingle();
+
+      if (
+        integration?.zoho_client_id &&
+        integration?.zoho_client_secret &&
+        integration?.zoho_refresh_token &&
+        integration?.zoho_organization_id
+      ) {
+        creds = {
+          clientId: integration.zoho_client_id,
+          clientSecret: integration.zoho_client_secret,
+          refreshToken: integration.zoho_refresh_token,
+          organizationId: integration.zoho_organization_id,
+          region: integration.zoho_region || 'com',
+        };
+      }
+    }
+
+    // Fallback to env vars
+    if (!creds) {
+      const clientId = Deno.env.get('ZOHO_CLIENT_ID');
+      const clientSecret = Deno.env.get('ZOHO_CLIENT_SECRET');
+      const refreshToken = Deno.env.get('ZOHO_REFRESH_TOKEN');
+      const organizationId = Deno.env.get('ZOHO_ORGANIZATION_ID');
+      const region = Deno.env.get('ZOHO_REGION') || 'com';
+
+      if (!clientId || !clientSecret || !refreshToken || !organizationId) {
+        throw new Error('No Zoho credentials found for this organization');
+      }
+
+      creds = { clientId, clientSecret, refreshToken, organizationId, region };
+    }
+
+    const accessToken = await getZohoAccessToken(creds);
+    const { organizationId, region } = creds;
 
     let result: any = { success: true };
 
     switch (action) {
       case 'test_connection': {
-        // Simple test to verify credentials work
-        // If getZohoAccessToken() succeeded (called above), connection is good
-        result.success = true;
         result.message = 'Successfully connected to Zoho API';
         break;
       }
 
       case 'sync_invoice': {
-        // Fetch invoice with customer info
         const { data: invoice, error: invoiceError } = await supabase
           .from('invoices')
           .select('*, customers(company_name)')
           .eq('id', invoiceId)
           .single();
 
-        if (invoiceError || !invoice) {
-          throw new Error(`Invoice not found: ${invoiceError?.message}`);
-        }
+        if (invoiceError || !invoice) throw new Error(`Invoice not found: ${invoiceError?.message}`);
 
         const zohoInvoiceId = await syncInvoiceToZoho(
-          accessToken,
-          organizationId,
-          invoice,
-          invoice.customers?.company_name || 'Unknown Customer'
+          accessToken, organizationId, invoice,
+          invoice.customers?.company_name || 'Unknown Customer', region
         );
 
         if (!zohoInvoiceId) throw new Error('Failed to sync invoice to Zoho');
-        await supabase
-          .from('invoices')
+        await supabase.from('invoices')
           .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
           .eq('id', invoiceId);
         result.zoho_invoice_id = zohoInvoiceId;
@@ -549,23 +428,15 @@ serve(async (req) => {
 
       case 'sync_expense': {
         const { data: expense, error: expenseError } = await supabase
-          .from('expenses')
-          .select('*')
-          .eq('id', expenseId)
-          .single();
+          .from('expenses').select('*').eq('id', expenseId).single();
 
-        if (expenseError || !expense) {
-          throw new Error(`Expense not found: ${expenseError?.message}`);
-        }
-
-        // Only sync approved expenses
+        if (expenseError || !expense) throw new Error(`Expense not found: ${expenseError?.message}`);
         if (expense.approval_status && expense.approval_status !== 'approved') {
           throw new Error('Expense must be approved before syncing to Zoho');
         }
 
-        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense, supabase);
-        await supabase
-          .from('expenses')
+        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, region, expense, supabase);
+        await supabase.from('expenses')
           .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
           .eq('id', expenseId);
         result.zoho_expense_id = zohoExpenseId;
@@ -574,32 +445,23 @@ serve(async (req) => {
 
       case 'sync_all_invoices': {
         const { data: invoices } = await supabase
-          .from('invoices')
-          .select('*, customers(company_name)')
-          .is('zoho_invoice_id', null);
+          .from('invoices').select('*, customers(company_name)').is('zoho_invoice_id', null);
 
-        let synced = 0;
-        let failed = 0;
-
+        let synced = 0, failed = 0;
         for (const invoice of invoices || []) {
-          const zohoInvoiceId = await syncInvoiceToZoho(
-            accessToken,
-            organizationId,
-            invoice,
-            invoice.customers?.company_name || 'Unknown Customer'
-          );
-
-          if (zohoInvoiceId) {
-            await supabase
-              .from('invoices')
-              .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
-              .eq('id', invoice.id);
-            synced++;
-          } else {
-            failed++;
-          }
+          try {
+            const zohoInvoiceId = await syncInvoiceToZoho(
+              accessToken, organizationId, invoice,
+              invoice.customers?.company_name || 'Unknown Customer', region
+            );
+            if (zohoInvoiceId) {
+              await supabase.from('invoices')
+                .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
+                .eq('id', invoice.id);
+              synced++;
+            } else failed++;
+          } catch { failed++; }
         }
-
         result.synced = synced;
         result.failed = failed;
         break;
@@ -607,58 +469,49 @@ serve(async (req) => {
 
       case 'sync_all_expenses': {
         const { data: expenses } = await supabase
-          .from('expenses')
-          .select('*')
-          .is('zoho_expense_id', null)
-          .eq('approval_status', 'approved');
+          .from('expenses').select('*').is('zoho_expense_id', null).eq('approval_status', 'approved');
 
-        let synced = 0;
-        let failed = 0;
-
+        let synced = 0, failed = 0;
         for (const expense of expenses || []) {
-          const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense, supabase);
-
-          if (zohoExpenseId) {
-            await supabase
-              .from('expenses')
-              .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
-              .eq('id', expense.id);
-            synced++;
-          } else {
-            failed++;
-          }
+          try {
+            const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, region, expense, supabase);
+            if (zohoExpenseId) {
+              await supabase.from('expenses')
+                .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
+                .eq('id', expense.id);
+              synced++;
+            } else failed++;
+          } catch { failed++; }
         }
-
         result.synced = synced;
         result.failed = failed;
         break;
       }
 
       case 'fetch_from_zoho': {
-        const zohoInvoices = await fetchInvoicesFromZoho(accessToken, organizationId);
-        const zohoExpenses = await fetchExpensesFromZoho(accessToken, organizationId);
-        result.invoices = zohoInvoices;
-        result.expenses = zohoExpenses;
+        const [invRes, expRes] = await Promise.all([
+          fetch(`${ZOHO_BOOKS_URL(region)}/invoices?organization_id=${organizationId}`, {
+            headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` },
+          }),
+          fetch(`${ZOHO_BOOKS_URL(region)}/expenses?organization_id=${organizationId}`, {
+            headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` },
+          }),
+        ]);
+        result.invoices = (await invRes.json()).invoices || [];
+        result.expenses = (await expRes.json()).expenses || [];
         break;
       }
 
       case 'fetch_bank_accounts': {
-        // Fetch bank and cash accounts from Zoho chart of accounts
         const accountsResponse = await fetch(
-          `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}`,
-          {
-            headers: {
-              'Authorization': `Zoho-oauthtoken ${accessToken}`,
-              'Content-Type': 'application/json',
-            },
-          }
+          `${ZOHO_BOOKS_URL(region)}/chartofaccounts?organization_id=${organizationId}`,
+          { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
         );
         const accountsData = await accountsResponse.json();
         const bankAccountTypes = ['bank', 'cash', 'other_current_asset'];
         const bankAccounts = (accountsData.chartofaccounts || []).filter((acc: any) =>
           bankAccountTypes.includes(acc.account_type?.toLowerCase())
         );
-        // Sync into local bank_accounts table: delete all and re-insert for simplicity
         const upsertRows = bankAccounts.map((acc: any) => ({
           zoho_account_id: acc.account_id,
           name: acc.account_name,
@@ -667,7 +520,6 @@ serve(async (req) => {
           is_active: acc.is_inactive === true ? false : true,
         }));
         if (upsertRows.length > 0) {
-          // Delete existing rows then insert fresh to avoid constraint issues
           await supabase.from('bank_accounts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
           await supabase.from('bank_accounts').insert(upsertRows);
         }
@@ -677,23 +529,20 @@ serve(async (req) => {
       }
 
       case 'fetch_customers': {
-        // Fetch all customers (contacts of type 'customer') from Zoho and upsert into local customers table
         let page = 1;
         const allContacts: any[] = [];
         while (true) {
           const res = await fetch(
-            `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_type=customer&page=${page}&per_page=200`,
+            `${ZOHO_BOOKS_URL(region)}/contacts?organization_id=${organizationId}&contact_type=customer&page=${page}&per_page=200`,
             { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
           );
           const data = await res.json();
-          const contacts: any[] = data.contacts || [];
-          allContacts.push(...contacts);
+          allContacts.push(...(data.contacts || []));
           if (!data.page_context?.has_more_page) break;
           page++;
         }
 
-        let upserted = 0;
-        let skipped = 0;
+        let upserted = 0, skipped = 0;
         for (const contact of allContacts) {
           if (!contact.contact_name) { skipped++; continue; }
           const phone = contact.phone || contact.mobile || '';
@@ -703,41 +552,28 @@ serve(async (req) => {
             ? `${contactPerson.first_name || ''} ${contactPerson.last_name || ''}`.trim() || contact.contact_name
             : contact.contact_name;
 
-          // Check if customer already exists by zoho_contact_id or company name
           const { data: existing } = await supabase
-            .from('customers')
-            .select('id')
-            .eq('zoho_contact_id', contact.contact_id)
-            .maybeSingle();
+            .from('customers').select('id').eq('zoho_contact_id', contact.contact_id).maybeSingle();
 
           if (existing) {
-            // Update existing
             await supabase.from('customers').update({
               company_name: contact.contact_name,
               contact_name: contactName,
-              email: email || existing.id, // preserve existing email if Zoho has none
               phone: phone,
               zoho_contact_id: contact.contact_id,
             }).eq('id', existing.id);
           } else {
-            // Check by company name before inserting
             const { data: byName } = await supabase
-              .from('customers')
-              .select('id, email')
-              .ilike('company_name', contact.contact_name)
-              .maybeSingle();
+              .from('customers').select('id').ilike('company_name', contact.contact_name).maybeSingle();
 
             if (byName) {
-              await supabase.from('customers').update({
-                zoho_contact_id: contact.contact_id,
-                phone: phone || undefined,
-              }).eq('id', byName.id);
+              await supabase.from('customers').update({ zoho_contact_id: contact.contact_id, phone: phone || undefined }).eq('id', byName.id);
             } else {
-              if (!email) { skipped++; continue; } // email is required
+              if (!email) { skipped++; continue; }
               await supabase.from('customers').insert({
                 company_name: contact.contact_name,
                 contact_name: contactName,
-                email: email,
+                email,
                 phone: phone || 'N/A',
                 zoho_contact_id: contact.contact_id,
               });
@@ -753,33 +589,24 @@ serve(async (req) => {
       }
 
       case 'fetch_invoices': {
-        // Pull invoices from Zoho Books and upsert into local invoices table
-        let page = 1;
-        let hasMore = true;
-        let upserted = 0;
-
+        let page = 1, hasMore = true, upserted = 0;
         while (hasMore) {
           const res = await fetch(
-            `${ZOHO_BOOKS_URL()}/invoices?organization_id=${organizationId}&page=${page}&per_page=200`,
+            `${ZOHO_BOOKS_URL(region)}/invoices?organization_id=${organizationId}&page=${page}&per_page=200`,
             { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
           );
           const data = await res.json();
           const zohoInvoices: any[] = data.invoices || [];
-          hasMore = data.page_context?.has_more_page === true;
+          hasMore = data.page_context?.has_more_page === true && zohoInvoices.length === 200;
           page++;
 
           for (const zi of zohoInvoices) {
-            // Try to match customer by name to a local customer
             let customerId: string | null = null;
             if (zi.customer_name) {
               const { data: customer } = await supabase
-                .from('customers')
-                .select('id')
-                .ilike('company_name', zi.customer_name)
-                .maybeSingle();
+                .from('customers').select('id').ilike('company_name', zi.customer_name).maybeSingle();
               customerId = customer?.id || null;
             }
-
             const invoicePayload: any = {
               invoice_number: zi.invoice_number || null,
               customer_id: customerId,
@@ -793,14 +620,8 @@ serve(async (req) => {
               zoho_invoice_id: zi.invoice_id,
               zoho_synced_at: new Date().toISOString(),
             };
-
-            // Upsert by zoho_invoice_id
             const { data: existing } = await supabase
-              .from('invoices')
-              .select('id')
-              .eq('zoho_invoice_id', zi.invoice_id)
-              .maybeSingle();
-
+              .from('invoices').select('id').eq('zoho_invoice_id', zi.invoice_id).maybeSingle();
             if (existing) {
               await supabase.from('invoices').update(invoicePayload).eq('id', existing.id);
             } else {
@@ -808,43 +629,30 @@ serve(async (req) => {
             }
             upserted++;
           }
-
-          if (zohoInvoices.length < 200) hasMore = false;
         }
-
-        result.success = true;
         result.upserted = upserted;
         break;
       }
 
       case 'fetch_bills': {
-        // Pull vendor bills from Zoho Books and upsert into local bills table
-        let page = 1;
-        let hasMore = true;
-        let upserted = 0;
-
+        let page = 1, hasMore = true, upserted = 0;
         while (hasMore) {
           const res = await fetch(
-            `${ZOHO_BOOKS_URL()}/bills?organization_id=${organizationId}&page=${page}&per_page=200`,
+            `${ZOHO_BOOKS_URL(region)}/bills?organization_id=${organizationId}&page=${page}&per_page=200`,
             { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
           );
           const data = await res.json();
           const zohoBills: any[] = data.bills || [];
-          hasMore = data.page_context?.has_more_page === true;
+          hasMore = data.page_context?.has_more_page === true && zohoBills.length === 200;
           page++;
 
           for (const zb of zohoBills) {
-            // Try to match vendor by name to a local partner
             let vendorId: string | null = null;
             if (zb.vendor_name) {
               const { data: partner } = await supabase
-                .from('partners')
-                .select('id')
-                .ilike('company_name', zb.vendor_name)
-                .maybeSingle();
+                .from('partners').select('id').ilike('company_name', zb.vendor_name).maybeSingle();
               vendorId = partner?.id || null;
             }
-
             const billPayload = {
               bill_number: zb.bill_number || zb.reference_number || null,
               vendor_id: vendorId,
@@ -857,14 +665,8 @@ serve(async (req) => {
               zoho_bill_id: zb.bill_id,
               zoho_synced_at: new Date().toISOString(),
             };
-
-            // Upsert by zoho_bill_id
             const { data: existing } = await supabase
-              .from('bills' as any)
-              .select('id')
-              .eq('zoho_bill_id', zb.bill_id)
-              .maybeSingle();
-
+              .from('bills' as any).select('id').eq('zoho_bill_id', zb.bill_id).maybeSingle();
             if (existing) {
               await supabase.from('bills' as any).update(billPayload).eq('id', existing.id);
             } else {
@@ -872,90 +674,67 @@ serve(async (req) => {
             }
             upserted++;
           }
-
-          if (zohoBills.length < 200) hasMore = false;
         }
-
-        result.success = true;
         result.upserted = upserted;
         break;
       }
 
       case 'sync_bill': {
-        // Push a local bill to Zoho Books as a vendor bill
         const { data: bill, error: billErr } = await supabase
-          .from('bills' as any)
-          .select('*')
-          .eq('id', billId)
-          .single();
-
+          .from('bills' as any).select('*').eq('id', billId).single();
         if (billErr || !bill) throw new Error('Bill not found: ' + billId);
 
-        // Resolve vendor contact in Zoho (try exact match, then fuzzy search, then auto-create)
         let zohoVendorId: string | null = null;
         const vendorName = (bill as any).vendor_name || '';
 
         if (vendorName) {
-          // 1. Try exact match by contact_name
           const exactRes = await fetch(
-            `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&contact_name=${encodeURIComponent(vendorName)}&contact_type=vendor`,
+            `${ZOHO_BOOKS_URL(region)}/contacts?organization_id=${organizationId}&contact_name=${encodeURIComponent(vendorName)}&contact_type=vendor`,
             { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` } }
           );
-          const exactData = await exactRes.json();
-          zohoVendorId = exactData.contacts?.[0]?.contact_id || null;
+          zohoVendorId = (await exactRes.json()).contacts?.[0]?.contact_id || null;
 
-          // 2. Fuzzy search if exact match fails — verify returned name actually matches
           if (!zohoVendorId) {
             const searchRes = await fetch(
-              `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}&search_text=${encodeURIComponent(vendorName)}&contact_type=vendor`,
+              `${ZOHO_BOOKS_URL(region)}/contacts?organization_id=${organizationId}&search_text=${encodeURIComponent(vendorName)}&contact_type=vendor`,
               { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}` } }
             );
-            const searchData = await searchRes.json();
             const vendorNameLower = vendorName.toLowerCase();
-            const matched = (searchData.contacts || []).find((c: any) => {
+            const matched = ((await searchRes.json()).contacts || []).find((c: any) => {
               const n = (c.contact_name || '').toLowerCase();
               return n.includes(vendorNameLower) || vendorNameLower.includes(n);
             });
             zohoVendorId = matched?.contact_id || null;
           }
 
-          // 3. Auto-create vendor in Zoho if still not found
           if (!zohoVendorId) {
-            console.log(`Vendor "${vendorName}" not found in Zoho — auto-creating...`);
             const createRes = await fetch(
-              `${ZOHO_BOOKS_URL()}/contacts?organization_id=${organizationId}`,
+              `${ZOHO_BOOKS_URL(region)}/contacts?organization_id=${organizationId}`,
               {
                 method: 'POST',
                 headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contact_name: vendorName, contact_type: 'vendor' }),
               }
             );
-            const createData = await createRes.json();
-            zohoVendorId = createData.contact?.contact_id || null;
-            if (!zohoVendorId) throw new Error(`Failed to create vendor "${vendorName}" in Zoho: ${createData.message || 'Unknown error'}`);
-            console.log(`Auto-created vendor "${vendorName}" in Zoho: ${zohoVendorId}`);
+            zohoVendorId = (await createRes.json()).contact?.contact_id || null;
+            if (!zohoVendorId) throw new Error(`Failed to create vendor "${vendorName}" in Zoho`);
           }
         }
 
         if (!zohoVendorId) throw new Error('Vendor name is missing on this bill.');
 
-        // Build line items from stored JSON, falling back to single line
-        // Fetch chart of accounts to resolve account_id from account names
         const coaRes = await fetch(
-          `${ZOHO_BOOKS_URL()}/chartofaccounts?organization_id=${organizationId}`,
+          `${ZOHO_BOOKS_URL(region)}/chartofaccounts?organization_id=${organizationId}`,
           { headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' } }
         );
-        const coaData = await coaRes.json();
-        const allAccounts: any[] = coaData.chartofaccounts || [];
-
+        const allAccounts: any[] = (await coaRes.json()).chartofaccounts || [];
         const resolveAccountId = (name: string): string | undefined => {
           if (!name) return undefined;
-          const match = allAccounts.find((a: any) =>
+          return allAccounts.find((a: any) =>
             a.account_name.toLowerCase() === name.toLowerCase() ||
             a.account_name.toLowerCase().includes(name.toLowerCase()) ||
             name.toLowerCase().includes(a.account_name.toLowerCase())
-          );
-          return match?.account_id;
+          )?.account_id;
         };
 
         const storedLines: any[] = (bill as any).line_items || [];
@@ -966,19 +745,12 @@ serve(async (req) => {
                 quantity: Number(l.quantity) || 1,
                 rate: Number(l.rate) || 0,
               };
-              // Resolve account_id from the stored display name
-              const acctId = resolveAccountId(l.account);
+              const acctId = resolveAccountId(l.account) || resolveAccountId('Miscellaneous Expenses') || allAccounts[0]?.account_id;
               if (acctId) item.account_id = acctId;
-              // VAT: exclusive adds tax_percentage; inclusive = tax embedded; none = no tax
-              if (l.vat_type === 'exclusive') {
-                item.tax_percentage = 7.5;
-              }
+              if (l.vat_type === 'exclusive') item.tax_percentage = 7.5;
               return item;
             })
-          : (() => {
-              const fallbackAcctId = resolveAccountId('Miscellaneous Expenses') || allAccounts[0]?.account_id;
-              return [{ description: (bill as any).notes || 'Vendor bill', quantity: 1, rate: Number((bill as any).amount), account_id: fallbackAcctId }];
-            })();
+          : [{ description: (bill as any).notes || 'Vendor bill', quantity: 1, rate: Number((bill as any).amount), account_id: resolveAccountId('Miscellaneous Expenses') || allAccounts[0]?.account_id }];
 
         const billPayload: any = {
           vendor_id: zohoVendorId,
@@ -988,25 +760,19 @@ serve(async (req) => {
           notes: (bill as any).notes || undefined,
           line_items: zohoLineItems,
         };
-
-        // Apply discount if present
         if ((bill as any).discount_pct && Number((bill as any).discount_pct) > 0) {
           billPayload.discount = Number((bill as any).discount_pct);
           billPayload.is_discount_before_tax = true;
           billPayload.discount_type = 'entity_level';
         }
-
-        // Apply adjustment if present
         if ((bill as any).adjustment && Number((bill as any).adjustment) !== 0) {
           billPayload.adjustment = Number((bill as any).adjustment);
         }
 
         let zohoBillId = (bill as any).zoho_bill_id;
-
         if (zohoBillId) {
-          // Update existing
           const updateRes = await fetch(
-            `${ZOHO_BOOKS_URL()}/bills/${zohoBillId}?organization_id=${organizationId}`,
+            `${ZOHO_BOOKS_URL(region)}/bills/${zohoBillId}?organization_id=${organizationId}`,
             {
               method: 'PUT',
               headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
@@ -1017,9 +783,8 @@ serve(async (req) => {
           if (updateData.bill?.bill_id) zohoBillId = updateData.bill.bill_id;
           else throw new Error(updateData.message || 'Failed to update bill in Zoho');
         } else {
-          // Create new
           const createRes = await fetch(
-            `${ZOHO_BOOKS_URL()}/bills?organization_id=${organizationId}`,
+            `${ZOHO_BOOKS_URL(region)}/bills?organization_id=${organizationId}`,
             {
               method: 'POST',
               headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
@@ -1034,69 +799,51 @@ serve(async (req) => {
         await supabase.from('bills' as any)
           .update({ zoho_bill_id: zohoBillId, zoho_synced_at: new Date().toISOString() })
           .eq('id', billId);
-
-        result.success = true;
         result.zoho_bill_id = zohoBillId;
         break;
       }
 
       case 'sync_back_to_back': {
-        // Atomic sync: approved expense (marks paid) + new invoice (creates + records payment in Zoho)
         const { data: expense, error: expErr } = await supabase
-          .from('expenses')
-          .select('*')
-          .eq('id', expenseId)
-          .single();
+          .from('expenses').select('*').eq('id', expenseId).single();
         if (expErr || !expense) throw new Error(`Expense not found: ${expErr?.message}`);
 
         const { data: invoice, error: invErr } = await supabase
-          .from('invoices')
-          .select('*, customers(company_name, zoho_contact_id)')
-          .eq('id', invoiceId)
-          .single();
+          .from('invoices').select('*, customers(company_name, zoho_contact_id)').eq('id', invoiceId).single();
         if (invErr || !invoice) throw new Error(`Invoice not found: ${invErr?.message}`);
 
-        // 1. Sync expense to Zoho (marks paid via paid_through_account_id)
-        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, expense, supabase);
+        const zohoExpenseId = await syncExpenseToZoho(accessToken, organizationId, region, expense, supabase);
         if (zohoExpenseId) {
           await supabase.from('expenses')
             .update({ zoho_expense_id: zohoExpenseId, zoho_synced_at: new Date().toISOString() })
             .eq('id', expenseId);
         }
 
-        // 2. Sync invoice to Zoho (creates invoice record)
         const customerName = (invoice as any).customers?.company_name || 'Unknown Customer';
-        const zohoInvoiceId = await syncInvoiceToZoho(accessToken, organizationId, invoice, customerName);
+        const zohoInvoiceId = await syncInvoiceToZoho(accessToken, organizationId, invoice, customerName, region);
         if (zohoInvoiceId) {
           await supabase.from('invoices')
             .update({ zoho_invoice_id: zohoInvoiceId, zoho_synced_at: new Date().toISOString() })
             .eq('id', invoiceId);
 
-          // 3. Mark invoice as collected in Zoho via customer payment
-          // Resolve Zoho account ID from the expense's bank account
           let zohoAccountId: string | null = null;
           if (paymentAccountId) {
             const { data: bankAccount } = await supabase
-              .from('bank_accounts')
-              .select('zoho_account_id')
-              .eq('id', paymentAccountId)
-              .maybeSingle();
+              .from('bank_accounts').select('zoho_account_id').eq('id', paymentAccountId).maybeSingle();
             zohoAccountId = bankAccount?.zoho_account_id || null;
           }
 
-          const zohoContactId = (invoice as any).customers?.zoho_contact_id || null;
-          // Resolve Zoho customer contact ID if not cached locally
-          const resolvedContactId = zohoContactId
-            || await resolveZohoCustomerId(accessToken, organizationId, customerName);
+          const zohoContactId = (invoice as any).customers?.zoho_contact_id
+            || await resolveZohoCustomerId(accessToken, organizationId, customerName, region);
 
-          if (resolvedContactId && zohoAccountId) {
+          if (zohoContactId && zohoAccountId) {
             const paymentRes = await fetch(
-              `${ZOHO_BOOKS_URL()}/customerpayments?organization_id=${organizationId}`,
+              `${ZOHO_BOOKS_URL(region)}/customerpayments?organization_id=${organizationId}`,
               {
                 method: 'POST',
                 headers: { 'Authorization': `Zoho-oauthtoken ${accessToken}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  customer_id: resolvedContactId,
+                  customer_id: zohoContactId,
                   payment_mode: 'cash',
                   amount: invoice.total_amount,
                   date: paymentDate || new Date().toISOString().split('T')[0],
@@ -1108,16 +855,11 @@ serve(async (req) => {
             );
             const paymentResult = await paymentRes.json();
             if (paymentResult.code !== 0) {
-              console.warn('Customer payment creation returned non-zero code:', paymentResult.message || paymentResult.code);
-            } else {
-              console.log('Invoice marked as paid in Zoho via customer payment');
+              console.warn('Customer payment creation returned non-zero code:', paymentResult.message);
             }
-          } else {
-            console.warn('Skipping Zoho payment record: missing zoho_contact_id or zoho_account_id');
           }
         }
 
-        result.success = true;
         result.zoho_expense_id = zohoExpenseId;
         result.zoho_invoice_id = zohoInvoiceId;
         break;
@@ -1132,8 +874,6 @@ serve(async (req) => {
     });
   } catch (error: any) {
     console.error('Zoho sync error:', error);
-    // Return 200 so supabase.functions.invoke populates `data` (not `error`),
-    // allowing the frontend to read the actual error message from data.error
     return new Response(
       JSON.stringify({ success: false, error: error.message }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
