@@ -172,7 +172,7 @@ const Expenses = () => {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const { user, hasAnyRole } = useAuth();
+  const { user, hasAnyRole, orgId } = useAuth();
   const { logChange } = useAuditLog();
 
   const [formData, setFormData] = useState({
@@ -399,6 +399,7 @@ const Expenses = () => {
               invoiceId: invData.id,
               paymentAccountId: formData.payment_account_id || null,
               paymentDate: b2bFormData.invoice_date,
+              orgId,
             },
           });
 
@@ -556,7 +557,7 @@ const Expenses = () => {
     setSyncingBankAccounts(true);
     try {
       const { data, error } = await supabase.functions.invoke('zoho-sync', {
-        body: { action: 'fetch_bank_accounts' },
+        body: { action: 'fetch_bank_accounts', orgId },
       });
       if (error) throw error;
       if (data.success) {
@@ -584,7 +585,7 @@ const Expenses = () => {
     setSyncingCustomers(true);
     try {
       const { data, error } = await supabase.functions.invoke("zoho-sync", {
-        body: { action: "fetch_customers" },
+        body: { action: "fetch_customers", orgId },
       });
       if (error) throw error;
       const res = await supabase.from("customers").select("id, company_name").order("company_name");
@@ -623,6 +624,7 @@ const Expenses = () => {
         body: {
           action: expenseId ? 'sync_expense' : 'sync_all_expenses',
           expenseId,
+          orgId,
         },
       });
 

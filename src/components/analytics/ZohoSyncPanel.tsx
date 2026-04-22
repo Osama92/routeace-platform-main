@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 
 interface SyncLog {
@@ -44,6 +45,7 @@ const ZohoSyncPanel = () => {
   const [testing, setTesting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"unknown" | "connected" | "failed">("unknown");
   const { toast } = useToast();
+  const { orgId } = useAuth();
 
   const fetchData = async () => {
     try {
@@ -86,7 +88,7 @@ const ZohoSyncPanel = () => {
     setConnectionStatus("unknown");
     try {
       const { data, error } = await supabase.functions.invoke("zoho-sync", {
-        body: { action: "test_connection" },
+        body: { action: "test_connection", orgId },
       });
 
       if (error) throw error;
@@ -131,7 +133,7 @@ const ZohoSyncPanel = () => {
         .single();
 
       const { data, error } = await supabase.functions.invoke("zoho-sync", {
-        body: { action: syncType },
+        body: { action: syncType, orgId },
       });
 
       if (error) throw error;

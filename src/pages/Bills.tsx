@@ -183,7 +183,7 @@ const Bills = () => {
   const [formData, setFormData] = useState(emptyForm());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const { user, hasAnyRole, grantedRoutes } = useAuth();
+  const { user, hasAnyRole, grantedRoutes, orgId } = useAuth();
   const { logChange } = useAuditLog();
 
   const canManage = hasAnyRole(["admin", "operations"]) || grantedRoutes.has("/bills");
@@ -339,7 +339,7 @@ const Bills = () => {
   const syncToZoho = async (billId: string) => {
     setSyncing(true);
     try {
-      const { data, error } = await supabase.functions.invoke("zoho-sync", { body: { action: "sync_bill", billId } });
+      const { data, error } = await supabase.functions.invoke("zoho-sync", { body: { action: "sync_bill", billId, orgId } });
       if (error) throw error;
       if (data?.success === false) throw new Error(data.error);
       toast({ title: "Bill synced to Zoho" });
@@ -352,7 +352,7 @@ const Bills = () => {
   const fetchFromZoho = async () => {
     setFetchingZoho(true);
     try {
-      const { data, error } = await supabase.functions.invoke("zoho-sync", { body: { action: "fetch_bills" } });
+      const { data, error } = await supabase.functions.invoke("zoho-sync", { body: { action: "fetch_bills", orgId } });
       if (error) throw error;
       if (data?.success === false) throw new Error(data.error);
       toast({ title: "Bills pulled from Zoho", description: `${data?.upserted ?? 0} bill(s) imported.` });

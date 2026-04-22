@@ -9,7 +9,7 @@ interface ProtectedRouteProps {
 }
 
 const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
-  const { user, userRole, loading, isApproved, approvalStatus, suspensionReason, grantedRoutes } = useAuth();
+  const { user, userRole, orgId, loading, isApproved, approvalStatus, suspensionReason, grantedRoutes } = useAuth();
   const location = useLocation();
 
   // Show spinner while auth is initialising OR while user is known but approval not yet fetched
@@ -53,6 +53,11 @@ const ProtectedRoute = ({ children, allowedRoles }: ProtectedRouteProps) => {
   // Only check roles if user is approved
   if (!isApproved) {
     return <PendingApprovalScreen />;
+  }
+
+  // If approved but no org membership yet → send to org setup
+  if (orgId === null && location.pathname !== "/setup-organization") {
+    return <Navigate to="/setup-organization" replace />;
   }
 
   // If roles are specified and user doesn't have any of the allowed roles,

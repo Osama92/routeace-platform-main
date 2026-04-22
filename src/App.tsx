@@ -48,6 +48,8 @@ import DriverBonuses from "./pages/DriverBonuses";
 import TripRateConfig from "./pages/TripRateConfig";
 import HistoricalDataMigration from "./pages/HistoricalDataMigration";
 import PendingApprovals from "./pages/PendingApprovals";
+import OrganizationSetup from "./pages/OrganizationSetup";
+import OrgSettings from "./pages/OrgSettings";
 import NotFound from "./pages/NotFound";
 import OnlineUsersIndicator from "./components/shared/OnlineUsersIndicator";
 
@@ -67,6 +69,15 @@ const App = () => (
           <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route path="/user-auth" element={<UserAuth />} />
+            <Route path="/setup-organization" element={<OrganizationSetup />} />
+            <Route
+              path="/org-settings"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <OrgSettings />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/"
               element={

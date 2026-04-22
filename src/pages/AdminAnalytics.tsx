@@ -259,11 +259,20 @@ const AdminAnalytics = () => {
 
       if (expError) throw expError;
 
+      // Fetch bills for selected month — full bill amount counts toward COGS
+      const { data: periodBills } = await (supabase as any)
+        .from("bills")
+        .select("amount, bill_date")
+        .gte("bill_date", periodStart.split("T")[0])
+        .lte("bill_date", periodEnd.split("T")[0]);
+
+      const billsCogs = ((periodBills as any[]) || []).reduce((sum: number, bill: any) => sum + Number(bill.amount || 0), 0);
+
       // Calculate totals — revenue = all invoices raised; collected = paid only
       const revenue = invoices?.reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
       const collected = invoices?.filter(inv => inv.status === "paid").reduce((sum, inv) => sum + Number(inv.total_amount), 0) || 0;
       const approvedExpenses = expenses?.filter(e => e.approval_status === "approved") || [];
-      const cogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
+      const cogs = approvedExpenses.filter(e => e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0) + billsCogs;
       const operatingExpenses = approvedExpenses.filter(e => !e.is_cogs).reduce((sum, exp) => sum + Number(exp.amount), 0);
       const grossProfit = revenue - cogs;
       const netProfit = grossProfit - operatingExpenses;
@@ -299,9 +308,10 @@ const AdminAnalytics = () => {
       const lastDay6 = new Date(lastM.year, lastM.month, 0).getDate();
       const chartEnd = `${lastM.year}-${String(lastM.month).padStart(2, '0')}-${lastDay6}`;
 
-      const [{ data: chartInvoices }, { data: chartExpenses }] = await Promise.all([
+      const [{ data: chartInvoices }, { data: chartExpenses }, { data: chartBills }] = await Promise.all([
         supabase.from("invoices").select("total_amount, invoice_date").gte("invoice_date", chartStart).lte("invoice_date", chartEnd),
         supabase.from("expenses").select("amount, is_cogs, expense_date").gte("expense_date", chartStart).lte("expense_date", chartEnd),
+        (supabase as any).from("bills").select("amount, bill_date").gte("bill_date", chartStart).lte("bill_date", chartEnd),
       ]);
 
       // Also fetch approved targets for those 6 months
@@ -331,6 +341,10 @@ const AdminAnalytics = () => {
           if (exp.is_cogs) buckets[k].cogs += Number(exp.amount);
           else buckets[k].opex += Number(exp.amount);
         }
+      });
+      ((chartBills as any[]) || []).forEach((bill: any) => {
+        const k = bill.bill_date?.slice(0, 7);
+        if (buckets[k]) buckets[k].cogs += Number(bill.amount || 0);
       });
 
       const chartData = last6Months.map(m => {

@@ -5,10 +5,18 @@ import { supabase } from "@/integrations/supabase/client";
 type AppRole = "admin" | "operations" | "support" | "dispatcher" | "driver";
 type ApprovalStatus = "pending" | "approved" | "suspended" | "rejected";
 
+interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   userRole: AppRole | null;
+  orgId: string | null;
+  organization: Organization | null;
   loading: boolean;
   currentSessionId: string | null;
   isApproved: boolean;
@@ -37,6 +45,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [userRole, setUserRole] = useState<AppRole | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [organization, setOrganization] = useState<Organization | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [approvalStatus, setApprovalStatus] = useState<ApprovalStatus | null>(null);
@@ -62,22 +72,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const fetchUserRole = async (userId: string) => {
+  const fetchUserRole = async (userId: string): Promise<{ role: AppRole | null; orgId: string | null; organization: Organization | null }> => {
     try {
       const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
+        .from("org_members")
+        .select("role, org_id, organizations(id, name, slug)")
         .eq("user_id", userId)
+        .eq("is_active", true)
         .single();
 
-      if (error) {
-        console.log("No role found for user");
-        return null;
+      if (error || !data) {
+        // Fallback to user_roles for backward compatibility
+        const { data: roleData } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", userId)
+          .single();
+        return { role: (roleData?.role as AppRole) ?? null, orgId: null, organization: null };
       }
-      return data?.role as AppRole;
+
+      const org = data.organizations as any;
+      return {
+        role: data.role as AppRole,
+        orgId: data.org_id,
+        organization: org ? { id: org.id, name: org.name, slug: org.slug } : null,
+      };
     } catch (error) {
       console.error("Error fetching user role:", error);
-      return null;
+      return { role: null, orgId: null, organization: null };
     }
   };
 
@@ -197,8 +219,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 sessionCreatedByEventRef.current = true;
               }
             }
-            const role = await fetchUserRole(session.user.id);
+            const { role, orgId: fetchedOrgId, organization: fetchedOrg } = await fetchUserRole(session.user.id);
             setUserRole(role);
+            setOrgId(fetchedOrgId);
+            setOrganization(fetchedOrg);
             const { status, reason } = await fetchApprovalStatus(session.user.id, role);
             setApprovalStatus(status);
             setSuspensionReason(reason);
@@ -212,6 +236,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setCurrentSessionId(null);
           }
           setUserRole(null);
+          setOrgId(null);
+          setOrganization(null);
           setApprovalStatus(null);
           setSuspensionReason(null);
           setGrantedRoutes(new Set());
@@ -221,8 +247,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         } else if (session?.user) {
           // Token refresh or other events
           setTimeout(async () => {
-            const role = await fetchUserRole(session.user.id);
+            const { role, orgId: fetchedOrgId, organization: fetchedOrg } = await fetchUserRole(session.user.id);
             setUserRole(role);
+            setOrgId(fetchedOrgId);
+            setOrganization(fetchedOrg);
             const { status, reason } = await fetchApprovalStatus(session.user.id, role);
             setApprovalStatus(status);
             setSuspensionReason(reason);
@@ -247,8 +275,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setCurrentSessionId(newSessionId);
           }
         }
-        const role = await fetchUserRole(session.user.id);
+        const { role, orgId: fetchedOrgId, organization: fetchedOrg } = await fetchUserRole(session.user.id);
         setUserRole(role);
+        setOrgId(fetchedOrgId);
+        setOrganization(fetchedOrg);
         const { status, reason } = await fetchApprovalStatus(session.user.id, role);
         setApprovalStatus(status);
         setSuspensionReason(reason);
@@ -315,6 +345,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
     setSession(null);
     setUserRole(null);
+    setOrgId(null);
+    setOrganization(null);
     setApprovalStatus(null);
     setSuspensionReason(null);
   };
@@ -329,6 +361,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         user,
         session,
         userRole,
+        orgId,
+        organization,
         loading,
         currentSessionId,
         isApproved,

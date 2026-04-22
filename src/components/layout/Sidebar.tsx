@@ -63,6 +63,7 @@ const adminNavigation = [
   { name: "Session Alerts", href: "/session-alerts", icon: AlertTriangle },
   { name: "Email Templates", href: "/email-templates", icon: FileEdit },
   { name: "Users", href: "/users", icon: UserCog },
+  { name: "Org Settings", href: "/org-settings", icon: Building2 },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -73,7 +74,7 @@ const supportNavigation = [
 const Sidebar = () => {
   const { isOpen, setIsOpen, isCollapsed, setIsCollapsed } = useSidebar();
   const location = useLocation();
-  const { userRole, signOut, user, grantedRoutes } = useAuth();
+  const { userRole, signOut, user, grantedRoutes, organization } = useAuth();
   const [isMobile, setIsMobile] = useState(false);
   const [hiddenMenus, setHiddenMenus] = useState<Set<string>>(new Set());
   const fetchedUserId = useRef<string | null>(null);
@@ -142,9 +143,11 @@ const Sidebar = () => {
           <Truck className="w-5 h-5 text-primary-foreground" />
         </div>
         {(!isCollapsed || isMobile) && (
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <h1 className="font-heading font-semibold text-lg text-foreground">RouteAce</h1>
-            <p className="text-xs text-muted-foreground">Logistics Platform</p>
+            <p className="text-xs text-muted-foreground truncate">
+              {organization?.name || "Logistics Platform"}
+            </p>
           </div>
         )}
         {isMobile && (
