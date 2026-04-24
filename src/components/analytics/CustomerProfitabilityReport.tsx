@@ -110,6 +110,13 @@ const CustomerProfitabilityReport = ({ month, year }: Props) => {
         .gte("expense_date", periodStart)
         .lte("expense_date", periodEnd);
 
+      // Fetch bills for the selected period (line items carry customer_id attribution)
+      const { data: bills } = await (supabase as any)
+        .from("bills")
+        .select("line_items, bill_date, amount")
+        .gte("bill_date", periodStart)
+        .lte("bill_date", periodEnd);
+
       // Fetch dispatches for the selected period
       const { data: dispatches } = await supabase
         .from("dispatches")
@@ -149,6 +156,33 @@ const CustomerProfitabilityReport = ({ month, year }: Props) => {
           }
         }
       });
+
+      // Add COGS from bills — attribute via line item customer_id where available,
+      // otherwise spread the bill's total amount across all customers by revenue share
+      const billsWithLines = ((bills as any[]) || []).filter((b: any) => b.line_items?.length > 0);
+      const billsWithoutLines = ((bills as any[]) || []).filter((b: any) => !b.line_items?.length);
+
+      billsWithLines.forEach((bill: any) => {
+        (bill.line_items as any[]).forEach((l: any) => {
+          if (l.customer_id) {
+            const existing = profitabilityMap.get(l.customer_id);
+            if (existing) {
+              existing.cogs += Number(l.rate || 0) * Number(l.quantity || 1);
+            }
+          }
+        });
+      });
+
+      // For bills with no line items (Zoho-imported), distribute proportionally by revenue
+      const totalBillsUnattributed = billsWithoutLines.reduce((s: number, b: any) => s + Number(b.amount || 0), 0);
+      if (totalBillsUnattributed > 0) {
+        const totalRevenue = Array.from(profitabilityMap.values()).reduce((s, c) => s + c.revenue, 0);
+        if (totalRevenue > 0) {
+          profitabilityMap.forEach((item) => {
+            item.cogs += totalBillsUnattributed * (item.revenue / totalRevenue);
+          });
+        }
+      }
 
       // Count dispatches
       dispatches?.forEach((disp) => {
