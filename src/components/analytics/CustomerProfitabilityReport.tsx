@@ -103,26 +103,46 @@ const CustomerProfitabilityReport = ({ month, year }: Props) => {
         .gte("invoice_date", periodStart)
         .lte("invoice_date", periodEnd);
 
-      // Fetch expenses for the selected period using expense_date
+      // Fetch approved COGS expenses for the period (include dispatch_id for fallback attribution)
       const { data: expenses } = await supabase
         .from("expenses")
-        .select("customer_id, amount, is_cogs")
+        .select("customer_id, dispatch_id, amount, is_cogs, approval_status")
         .gte("expense_date", periodStart)
-        .lte("expense_date", periodEnd);
+        .lte("expense_date", periodEnd)
+        .eq("approval_status", "approved")
+        .eq("is_cogs", true);
 
-      // Fetch bills for the selected period (line items carry customer_id attribution)
+      // Fetch bills for the period (exclude drafts and void)
       const { data: bills } = await (supabase as any)
         .from("bills")
-        .select("line_items, bill_date, amount")
+        .select("line_items, bill_date, amount, status")
         .gte("bill_date", periodStart)
-        .lte("bill_date", periodEnd);
+        .lte("bill_date", periodEnd)
+        .not("status", "in", "(draft,void)");
 
-      // Fetch dispatches for the selected period
+      // Fetch dispatches for the period (for dispatch count + customer mapping)
       const { data: dispatches } = await supabase
         .from("dispatches")
         .select("customer_id, id")
         .gte("created_at", periodStart)
         .lte("created_at", periodEnd + "T23:59:59");
+
+      // Build dispatch→customer lookup so expenses with dispatch_id but no customer_id
+      // can still be attributed to the correct customer
+      const dispatchToCustomer = new Map<string, string>();
+      dispatches?.forEach((d) => { if (d.customer_id) dispatchToCustomer.set(d.id, d.customer_id); });
+
+      // For expenses that reference dispatches outside the period, fetch those dispatches too
+      const missingDispatchIds = (expenses || [])
+        .filter(e => e.dispatch_id && !dispatchToCustomer.has(e.dispatch_id))
+        .map(e => e.dispatch_id as string);
+      if (missingDispatchIds.length > 0) {
+        const { data: extraDispatches } = await supabase
+          .from("dispatches")
+          .select("id, customer_id")
+          .in("id", missingDispatchIds);
+        extraDispatches?.forEach((d) => { if (d.customer_id) dispatchToCustomer.set(d.id, d.customer_id); });
+      }
 
       // Build profitability data
       const profitabilityMap = new Map<string, CustomerProfitability>();
@@ -147,42 +167,29 @@ const CustomerProfitabilityReport = ({ month, year }: Props) => {
         }
       });
 
-      // Add COGS from expenses
+      // Add COGS from approved expenses
+      // Resolution order: expense.customer_id → dispatch.customer_id → unattributed (skip)
       expenses?.forEach((exp) => {
-        if (exp.customer_id && exp.is_cogs) {
-          const existing = profitabilityMap.get(exp.customer_id);
-          if (existing) {
-            existing.cogs += Number(exp.amount);
-          }
+        const customerId = exp.customer_id ||
+          (exp.dispatch_id ? dispatchToCustomer.get(exp.dispatch_id) : null);
+        if (customerId) {
+          const existing = profitabilityMap.get(customerId);
+          if (existing) existing.cogs += Number(exp.amount);
         }
       });
 
-      // Add COGS from bills — attribute via line item customer_id where available,
-      // otherwise spread the bill's total amount across all customers by revenue share
-      const billsWithLines = ((bills as any[]) || []).filter((b: any) => b.line_items?.length > 0);
-      const billsWithoutLines = ((bills as any[]) || []).filter((b: any) => !b.line_items?.length);
-
-      billsWithLines.forEach((bill: any) => {
-        (bill.line_items as any[]).forEach((l: any) => {
+      // Add COGS from bills — only line items that have an explicit customer_id
+      // Bills without customer attribution are excluded from per-customer COGS
+      // (they are already counted in the overall P&L COGS)
+      ((bills as any[]) || []).forEach((bill: any) => {
+        const lines: any[] = bill.line_items || [];
+        lines.forEach((l: any) => {
           if (l.customer_id) {
             const existing = profitabilityMap.get(l.customer_id);
-            if (existing) {
-              existing.cogs += Number(l.rate || 0) * Number(l.quantity || 1);
-            }
+            if (existing) existing.cogs += Number(l.rate || 0) * Number(l.quantity || 1);
           }
         });
       });
-
-      // For bills with no line items (Zoho-imported), distribute proportionally by revenue
-      const totalBillsUnattributed = billsWithoutLines.reduce((s: number, b: any) => s + Number(b.amount || 0), 0);
-      if (totalBillsUnattributed > 0) {
-        const totalRevenue = Array.from(profitabilityMap.values()).reduce((s, c) => s + c.revenue, 0);
-        if (totalRevenue > 0) {
-          profitabilityMap.forEach((item) => {
-            item.cogs += totalBillsUnattributed * (item.revenue / totalRevenue);
-          });
-        }
-      }
 
       // Count dispatches
       dispatches?.forEach((disp) => {
@@ -229,12 +236,13 @@ const CustomerProfitabilityReport = ({ month, year }: Props) => {
         .eq("customer_id", customerId)
         .order("created_at", { ascending: false });
 
-      // Fetch COGS expenses linked to these dispatches with category breakdown
+      // Fetch approved COGS expenses for this customer (direct or via dispatch)
       const { data: cogsExpenses } = await supabase
         .from("expenses")
         .select("dispatch_id, amount, category")
         .eq("customer_id", customerId)
-        .eq("is_cogs", true);
+        .eq("is_cogs", true)
+        .eq("approval_status", "approved");
 
       // Fetch invoices for this customer
       const { data: invoices } = await supabase

@@ -111,12 +111,13 @@ const ProfitLossPage = () => {
         .gte("expense_date", format(start, "yyyy-MM-dd"))
         .lte("expense_date", format(end, "yyyy-MM-dd"));
 
-      // Fetch bills — full bill amount counts toward COGS
+      // Fetch bills — exclude drafts and voided bills
       const { data: periodBills } = await (supabase as any)
         .from("bills")
         .select("amount, bill_date")
         .gte("bill_date", format(start, "yyyy-MM-dd"))
-        .lte("bill_date", format(end, "yyyy-MM-dd"));
+        .lte("bill_date", format(end, "yyyy-MM-dd"))
+        .not("status", "in", "(draft,void)");
 
       // Fetch dispatches count
       const { count: dispatchCount } = await supabase
@@ -203,7 +204,8 @@ const ProfitLossPage = () => {
             .from("bills")
             .select("amount, bill_date")
             .gte("bill_date", format(monthStart, "yyyy-MM-dd"))
-            .lte("bill_date", format(monthEnd, "yyyy-MM-dd")),
+            .lte("bill_date", format(monthEnd, "yyyy-MM-dd"))
+            .not("status", "in", "(draft,void)"),
         ]);
 
         const approvedMonthExpenses = (monthExpenses || []).filter(e => e.approval_status === "approved");
