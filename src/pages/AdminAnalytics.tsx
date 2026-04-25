@@ -259,12 +259,13 @@ const AdminAnalytics = () => {
 
       if (expError) throw expError;
 
-      // Fetch bills for selected month — full bill amount counts toward COGS
+      // Fetch bills for selected month — exclude drafts and voided bills
       const { data: periodBills } = await (supabase as any)
         .from("bills")
         .select("amount, bill_date")
         .gte("bill_date", periodStart.split("T")[0])
-        .lte("bill_date", periodEnd.split("T")[0]);
+        .lte("bill_date", periodEnd.split("T")[0])
+        .not("status", "in", "(draft,void)");
 
       const billsCogs = ((periodBills as any[]) || []).reduce((sum: number, bill: any) => sum + Number(bill.amount || 0), 0);
 
@@ -311,7 +312,7 @@ const AdminAnalytics = () => {
       const [{ data: chartInvoices }, { data: chartExpenses }, { data: chartBills }] = await Promise.all([
         supabase.from("invoices").select("total_amount, invoice_date").gte("invoice_date", chartStart).lte("invoice_date", chartEnd),
         supabase.from("expenses").select("amount, is_cogs, expense_date").gte("expense_date", chartStart).lte("expense_date", chartEnd),
-        (supabase as any).from("bills").select("amount, bill_date").gte("bill_date", chartStart).lte("bill_date", chartEnd),
+        (supabase as any).from("bills").select("amount, bill_date").gte("bill_date", chartStart).lte("bill_date", chartEnd).not("status", "in", "(draft,void)"),
       ]);
 
       // Also fetch approved targets for those 6 months
